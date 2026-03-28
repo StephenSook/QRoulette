@@ -151,6 +151,7 @@ class RecentScansQuery(SchemaModel):
 class RecentScanRecord(ScanRecord):
     """Dashboard-oriented scan item enriched with protected-link context."""
 
+    registrable_domain: str | None = None
     protected_link_id: str | None = None
     protected_link_token: str | None = None
     protected_link_label: str | None = None

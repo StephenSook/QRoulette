@@ -85,17 +85,28 @@ create index if not exists idx_alerts_org_created on alerts(organization_id, cre
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
 from app.core.logging import get_logger
-from app.schemas.dashboard import DashboardOverviewMetrics, DashboardOverviewResponse
+from app.schemas.dashboard import (
+    DashboardAlertItem,
+    DashboardAlertsQuery,
+    DashboardLinkItem,
+    DashboardLinksQuery,
+    DashboardLinksResponse,
+    DashboardOverviewMetrics,
+    DashboardOverviewResponse,
+    DashboardRecentActivityMetrics,
+    DashboardScansQuery,
+)
 from app.schemas.enums import Verdict
 from app.schemas.persistence import PersistenceResult
 from app.schemas.protected_links import ProtectedLinkRecord
 from app.schemas.repository import (
-    AlertRecord,
     AlertsListParams,
+    AlertRecord,
     CreateProtectedLinkInput,
     CreateScanAnalysisInput,
     CreateScanEventInput,
@@ -194,6 +205,24 @@ class SupabaseRepository(ServiceStub):
         if normalized in {"danger", "dangerous", "malicious"}:
             return Verdict.MALICIOUS
         return Verdict.UNKNOWN
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        """Parse an ISO timestamp or pass through datetime values."""
+
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return None
+
+    @staticmethod
+    def _is_danger_level(value: str | None) -> bool:
+        """Return whether a persisted risk level is dangerous."""
+
+        return (value or "").lower() in {"danger", "dangerous", "malicious"}
 
     def _event_summary_row(self, payload: dict[str, Any]) -> CreateScanEventInput:
         """Translate a combined scan payload into a scan event input."""
@@ -355,18 +384,29 @@ class SupabaseRepository(ServiceStub):
 
         safe_count = 0
         suspicious_count = 0
-        malicious_count = 0
+        dangerous_count = 0
         unknown_count = 0
+        recent_activity = DashboardRecentActivityMetrics()
+        recent_cutoff = datetime.now(UTC) - timedelta(hours=24)
         for row in rows:
             verdict = self._to_verdict(row.get("risk_level"))
+            created_at = self._parse_datetime(row.get("created_at"))
             if verdict == Verdict.SAFE:
                 safe_count += 1
+                if created_at and created_at >= recent_cutoff:
+                    recent_activity.last_24h_safe += 1
             elif verdict == Verdict.SUSPICIOUS:
                 suspicious_count += 1
+                if created_at and created_at >= recent_cutoff:
+                    recent_activity.last_24h_suspicious += 1
             elif verdict == Verdict.MALICIOUS:
-                malicious_count += 1
+                dangerous_count += 1
+                if created_at and created_at >= recent_cutoff:
+                    recent_activity.last_24h_dangerous += 1
             else:
                 unknown_count += 1
+            if created_at and created_at >= recent_cutoff:
+                recent_activity.last_24h_total += 1
 
         latest_verdict = self._to_verdict(rows[0].get("risk_level") if rows else None)
         return DashboardOverviewResponse(
@@ -375,28 +415,60 @@ class SupabaseRepository(ServiceStub):
                 total_scans=len(rows),
                 safe_count=safe_count,
                 suspicious_count=suspicious_count,
-                malicious_count=malicious_count,
+                dangerous_count=dangerous_count,
                 unknown_count=unknown_count,
                 latest_verdict=latest_verdict,
+                recent_activity=recent_activity,
             ),
             message="Dashboard overview loaded from Supabase.",
         )
 
-    async def list_recent_scans(self, limit: int = 25) -> list[RecentScanRecord]:
+    async def list_recent_scans(
+        self,
+        params: DashboardScansQuery | int | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[RecentScanRecord]:
         """Return newest-first scan records joined from events and analyses."""
 
+        query_params = (
+            DashboardScansQuery(limit=limit)
+            if limit is not None
+            else DashboardScansQuery(limit=params)
+            if isinstance(params, int)
+            else params
+            if params is not None
+            else DashboardScansQuery()
+        )
         client = self._build_client()
         if client is None:
             return []
 
+        fetch_limit = (
+            max(query_params.limit, 200)
+            if any(
+                [
+                    query_params.verdict,
+                    query_params.domain,
+                    query_params.start_date,
+                    query_params.end_date,
+                ]
+            )
+            else query_params.limit
+        )
         # TODO: Add organization-scoped RLS before exposing recent scans to end-user sessions.
-        response = await self._run(
-            lambda: client.table("scan_events")
+        query = (
+            client.table("scan_events")
             .select(SCAN_EVENT_COLUMNS)
             .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
+            .limit(fetch_limit)
         )
+        if query_params.start_date:
+            query = query.gte("created_at", query_params.start_date.isoformat())
+        if query_params.end_date:
+            query = query.lte("created_at", query_params.end_date.isoformat())
+
+        response = await self._run(lambda: query.execute())
         event_rows = response.data or []
         events = [ScanEventRecord.model_validate(row) for row in event_rows]
         if not events:
@@ -422,38 +494,57 @@ class SupabaseRepository(ServiceStub):
         records: list[RecentScanRecord] = []
         for event in events:
             analysis = latest_by_event.get(event.id)
-            records.append(
-                RecentScanRecord(
-                    id=analysis.id if analysis else event.id,
-                    created_at=analysis.created_at or event.created_at or datetime.now(UTC),
-                    scanned_url=event.scanned_url,
-                    qr_code_id=event.qr_code_id,
-                    risk_score=analysis.risk_score if analysis else None,
-                    risk_level=analysis.risk_level if analysis else None,
-                    flagged_safe_browsing=analysis.flagged_safe_browsing if analysis else False,
-                    flagged_threat_intel=analysis.flagged_threat_intel if analysis else False,
-                    typosquatting_detected=analysis.typosquatting_detected if analysis else False,
-                    domain_age_days=analysis.domain_age_days if analysis else None,
-                    redirect_hops=analysis.redirect_hops if analysis else None,
-                    ssl_valid=analysis.ssl_valid if analysis else None,
-                    ai_summary=analysis.ai_summary if analysis else None,
-                    ip_address=event.ip_address,
-                    user_agent=event.user_agent,
-                    country=event.country,
-                    protected_link_id=event.protected_link_id,
-                    protected_link_token=event.protected_link_token,
-                    protected_link_label=event.protected_link_label,
-                )
+            record = RecentScanRecord(
+                id=analysis.id if analysis else event.id,
+                created_at=analysis.created_at or event.created_at or datetime.now(UTC),
+                scanned_url=event.scanned_url,
+                qr_code_id=event.qr_code_id,
+                risk_score=analysis.risk_score if analysis else None,
+                risk_level=analysis.risk_level if analysis else None,
+                flagged_safe_browsing=analysis.flagged_safe_browsing if analysis else False,
+                flagged_threat_intel=analysis.flagged_threat_intel if analysis else False,
+                typosquatting_detected=analysis.typosquatting_detected if analysis else False,
+                domain_age_days=analysis.domain_age_days if analysis else None,
+                redirect_hops=analysis.redirect_hops if analysis else None,
+                ssl_valid=analysis.ssl_valid if analysis else None,
+                ai_summary=analysis.ai_summary if analysis else None,
+                ip_address=event.ip_address,
+                user_agent=event.user_agent,
+                country=event.country,
+                registrable_domain=analysis.registrable_domain if analysis else event.registrable_domain,
+                protected_link_id=event.protected_link_id,
+                protected_link_token=event.protected_link_token,
+                protected_link_label=event.protected_link_label,
             )
+            if query_params.verdict and record.risk_level != query_params.verdict:
+                continue
+            if query_params.domain:
+                needle = query_params.domain.lower()
+                haystacks = [
+                    (record.registrable_domain or "").lower(),
+                    (record.scanned_url or "").lower(),
+                ]
+                if not any(needle in haystack for haystack in haystacks):
+                    continue
+            records.append(record)
+            if len(records) >= query_params.limit:
+                break
         return records
 
     async def list_protected_links(
         self,
-        params: ProtectedLinksListParams | None = None,
-    ) -> list[ProtectedLinkRecord]:
-        """Return protected links with optional organization/activity filters."""
+        params: DashboardLinksQuery | ProtectedLinksListParams | None = None,
+    ) -> list[DashboardLinkItem]:
+        """Return protected links with scan-count rollups."""
 
-        query_params = params or ProtectedLinksListParams()
+        if isinstance(params, ProtectedLinksListParams):
+            query_params = DashboardLinksQuery(
+                organization_id=params.organization_id,
+                is_active=params.is_active,
+                limit=params.limit,
+            )
+        else:
+            query_params = params or DashboardLinksQuery()
         client = self._build_client()
         if client is None:
             return []
@@ -471,15 +562,162 @@ class SupabaseRepository(ServiceStub):
 
         # TODO: Enforce organization-level RLS before exposing link lists to organization members.
         response = await self._run(lambda: query.execute())
-        return [ProtectedLinkRecord.model_validate(row) for row in (response.data or [])]
+        links = [ProtectedLinkRecord.model_validate(row) for row in (response.data or [])]
+        if not links:
+            return []
+
+        protected_link_ids = [link.id for link in links]
+        events_response = await self._run(
+            lambda: client.table("scan_events")
+            .select("id, protected_link_id, created_at")
+            .in_("protected_link_id", protected_link_ids)
+            .execute()
+        )
+        event_rows = events_response.data or []
+        scan_counts: dict[str, int] = defaultdict(int)
+        last_scanned_at: dict[str, datetime] = {}
+        event_ids_by_link: dict[str, list[str]] = defaultdict(list)
+        for row in event_rows:
+            link_id = row.get("protected_link_id")
+            event_id = row.get("id")
+            if not link_id or not event_id:
+                continue
+            scan_counts[link_id] += 1
+            event_ids_by_link[link_id].append(event_id)
+            created_at = self._parse_datetime(row.get("created_at"))
+            if created_at and (
+                link_id not in last_scanned_at or created_at > last_scanned_at[link_id]
+            ):
+                last_scanned_at[link_id] = created_at
+
+        analyses_response = await self._run(
+            lambda: client.table("scan_analyses")
+            .select("protected_link_id, risk_level")
+            .in_("protected_link_id", protected_link_ids)
+            .execute()
+        )
+        dangerous_counts: dict[str, int] = defaultdict(int)
+        suspicious_counts: dict[str, int] = defaultdict(int)
+        for row in analyses_response.data or []:
+            link_id = row.get("protected_link_id")
+            if not link_id:
+                continue
+            risk_level = row.get("risk_level")
+            if self._is_danger_level(risk_level):
+                dangerous_counts[link_id] += 1
+            elif risk_level == "suspicious":
+                suspicious_counts[link_id] += 1
+
+        return [
+            DashboardLinkItem(
+                **link.model_dump(mode="json"),
+                scan_count=scan_counts.get(link.id, 0),
+                dangerous_scan_count=dangerous_counts.get(link.id, 0),
+                suspicious_scan_count=suspicious_counts.get(link.id, 0),
+                last_scanned_at=last_scanned_at.get(link.id),
+            )
+            for link in links
+        ]
+
+    def _derive_alerts_from_scans(
+        self,
+        scans: list[RecentScanRecord],
+    ) -> list[DashboardAlertItem]:
+        """Build derived dashboard alerts from recent dangerous scan patterns."""
+
+        now = datetime.now(UTC)
+        dangerous_scans = [
+            scan for scan in scans if self._is_danger_level(scan.risk_level)
+        ]
+        if not dangerous_scans:
+            return []
+
+        derived: list[DashboardAlertItem] = []
+
+        hour_cutoff = now - timedelta(hours=1)
+        recent_dangerous = [
+            scan for scan in dangerous_scans if scan.created_at >= hour_cutoff
+        ]
+        if len(recent_dangerous) >= 5:
+            latest = max(scan.created_at for scan in recent_dangerous)
+            derived.append(
+                DashboardAlertItem(
+                    id=f"derived-spike-{latest.isoformat()}",
+                    created_at=latest,
+                    source="derived",
+                    alert_type="dangerous_scan_spike",
+                    severity="critical",
+                    title="Dangerous scan spike detected",
+                    message="Five or more dangerous scans were observed in the last hour.",
+                    count=len(recent_dangerous),
+                    metadata={"window": "1h", "threshold": 5},
+                )
+            )
+
+        domain_groups: dict[str, list[RecentScanRecord]] = defaultdict(list)
+        for scan in dangerous_scans:
+            if scan.registrable_domain:
+                domain_groups[scan.registrable_domain].append(scan)
+        for domain, items in domain_groups.items():
+            if len(items) >= 3:
+                latest = max(scan.created_at for scan in items)
+                derived.append(
+                    DashboardAlertItem(
+                        id=f"derived-domain-{domain}-{latest.isoformat()}",
+                        created_at=latest,
+                        source="derived",
+                        alert_type="repeated_malicious_domain",
+                        severity="critical",
+                        title="Repeated dangerous domain activity",
+                        message=(
+                            f"The domain `{domain}` has triggered three or more dangerous scans in the last 24 hours."
+                        ),
+                        count=len(items),
+                        registrable_domain=domain,
+                        metadata={"window": "24h", "threshold": 3},
+                    )
+                )
+
+        link_groups: dict[str, list[RecentScanRecord]] = defaultdict(list)
+        for scan in dangerous_scans:
+            if scan.protected_link_id:
+                link_groups[scan.protected_link_id].append(scan)
+        for link_id, items in link_groups.items():
+            if len(items) >= 3:
+                latest = max(scan.created_at for scan in items)
+                derived.append(
+                    DashboardAlertItem(
+                        id=f"derived-link-{link_id}-{latest.isoformat()}",
+                        created_at=latest,
+                        source="derived",
+                        alert_type="repeated_dangerous_verdicts",
+                        severity="warning",
+                        title="Protected link repeatedly flagged",
+                        message="A protected link has produced three or more dangerous verdicts in the last 24 hours.",
+                        count=len(items),
+                        protected_link_id=link_id,
+                        protected_link_label=items[0].protected_link_label,
+                        metadata={"window": "24h", "threshold": 3},
+                    )
+                )
+
+        derived.sort(key=lambda alert: alert.created_at, reverse=True)
+        return derived
 
     async def list_alerts(
         self,
-        params: AlertsListParams | None = None,
-    ) -> list[AlertRecord]:
-        """Return newest-first alerts with optional filters."""
+        params: DashboardAlertsQuery | AlertsListParams | None = None,
+    ) -> list[DashboardAlertItem]:
+        """Return newest-first persisted and derived alerts."""
 
-        query_params = params or AlertsListParams()
+        if isinstance(params, AlertsListParams):
+            query_params = DashboardAlertsQuery(
+                organization_id=params.organization_id,
+                status=params.status,
+                limit=params.limit,
+            )
+        else:
+            query_params = params or DashboardAlertsQuery()
         client = self._build_client()
         if client is None:
             return []
@@ -497,4 +735,33 @@ class SupabaseRepository(ServiceStub):
 
         # TODO: Enforce organization-level RLS before exposing alert feeds to organization members.
         response = await self._run(lambda: query.execute())
-        return [AlertRecord.model_validate(row) for row in (response.data or [])]
+        persisted_items = [
+            DashboardAlertItem(
+                id=alert.id,
+                created_at=alert.created_at or datetime.now(UTC),
+                source="persisted",
+                alert_type="persisted_alert",
+                severity=alert.severity,
+                status=alert.status,
+                title=alert.title,
+                message=alert.message,
+                protected_link_id=alert.protected_link_id,
+                metadata=alert.metadata,
+            )
+            for alert in [AlertRecord.model_validate(row) for row in (response.data or [])]
+        ]
+
+        derived_items = self._derive_alerts_from_scans(
+            await self.list_recent_scans(
+                DashboardScansQuery(
+                    start_date=datetime.now(UTC) - timedelta(hours=24),
+                    limit=min(max(query_params.limit * 10, 100), 200),
+                )
+            )
+        )
+        combined = sorted(
+            [*persisted_items, *derived_items],
+            key=lambda alert: alert.created_at,
+            reverse=True,
+        )
+        return combined[: query_params.limit]

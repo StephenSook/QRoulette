@@ -11,7 +11,13 @@ import pytest
 from app.api.deps import get_supabase_repository
 from app.core.app import create_application
 from app.core.config import Settings
-from app.schemas.dashboard import DashboardOverviewResponse
+from app.schemas.dashboard import (
+    DashboardAlertsResponse,
+    DashboardLinksResponse,
+    DashboardOverviewResponse,
+    DashboardScansQuery,
+    DashboardScansResponse,
+)
 from app.schemas.protected_links import ProtectedLinkRecord
 from app.schemas.repository import (
     AlertsListParams,
@@ -51,6 +57,10 @@ class _FakeTableQuery:
         self.filters.append(("gte", column, value))
         return self
 
+    def lte(self, column: str, value: object):
+        self.filters.append(("lte", column, value))
+        return self
+
     def in_(self, column: str, values: list[object]):
         self.filters.append(("in", column, values))
         return self
@@ -78,6 +88,8 @@ class _FakeTableQuery:
                 result = [row for row in result if row.get(column) == value]
             elif operation == "gte":
                 result = [row for row in result if row.get(column) >= value]
+            elif operation == "lte":
+                result = [row for row in result if row.get(column) <= value]
             elif operation == "in":
                 result = [row for row in result if row.get(column) in value]
         if self.ordering is not None:
@@ -143,6 +155,7 @@ async def test_repository_queries_return_typed_results() -> None:
     """The repository should map list and lookup queries into typed models."""
 
     created_recently = datetime.now(UTC).isoformat()
+    within_hour = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
     older = (datetime.now(UTC) - timedelta(days=30)).isoformat()
     tables = {
         "protected_links": [
@@ -155,7 +168,17 @@ async def test_repository_queries_return_typed_results() -> None:
                 "organization_id": "org_123",
                 "is_active": True,
                 "created_at": created_recently,
-            }
+            },
+            {
+                "id": "plink_2",
+                "token": "tok_2",
+                "original_url": "danger.example.com",
+                "normalized_url": "https://danger.example.com",
+                "label": "Warehouse",
+                "organization_id": "org_123",
+                "is_active": True,
+                "created_at": created_recently,
+            },
         ],
         "scan_events": [
             {
@@ -172,7 +195,82 @@ async def test_repository_queries_return_typed_results() -> None:
                 "ip_address": "1.2.3.4",
                 "user_agent": "pytest",
                 "country": "US",
-            }
+            },
+            {
+                "id": "event_2",
+                "created_at": created_recently,
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "protected_link_token": "tok_2",
+                "protected_link_label": "Warehouse",
+                "scanned_url": "https://danger.example.com/login",
+                "normalized_url": "https://danger.example.com/login",
+                "registrable_domain": "danger.example.com",
+                "ip_address": "1.2.3.5",
+                "user_agent": "pytest",
+                "country": "US",
+            },
+            {
+                "id": "event_3",
+                "created_at": within_hour,
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "protected_link_token": "tok_2",
+                "protected_link_label": "Warehouse",
+                "scanned_url": "https://danger.example.com/pay",
+                "normalized_url": "https://danger.example.com/pay",
+                "registrable_domain": "danger.example.com",
+                "ip_address": "1.2.3.6",
+                "user_agent": "pytest",
+                "country": "US",
+            },
+            {
+                "id": "event_4",
+                "created_at": within_hour,
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "protected_link_token": "tok_2",
+                "protected_link_label": "Warehouse",
+                "scanned_url": "https://danger.example.com/reset",
+                "normalized_url": "https://danger.example.com/reset",
+                "registrable_domain": "danger.example.com",
+                "ip_address": "1.2.3.7",
+                "user_agent": "pytest",
+                "country": "US",
+            },
+            {
+                "id": "event_5",
+                "created_at": within_hour,
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "protected_link_token": "tok_2",
+                "protected_link_label": "Warehouse",
+                "scanned_url": "https://danger.example.com/update",
+                "normalized_url": "https://danger.example.com/update",
+                "registrable_domain": "danger.example.com",
+                "ip_address": "1.2.3.8",
+                "user_agent": "pytest",
+                "country": "US",
+            },
+            {
+                "id": "event_6",
+                "created_at": within_hour,
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "protected_link_token": "tok_2",
+                "protected_link_label": "Warehouse",
+                "scanned_url": "https://danger.example.com/verify",
+                "normalized_url": "https://danger.example.com/verify",
+                "registrable_domain": "danger.example.com",
+                "ip_address": "1.2.3.9",
+                "user_agent": "pytest",
+                "country": "US",
+            },
         ],
         "scan_analyses": [
             {
@@ -193,6 +291,101 @@ async def test_repository_queries_return_typed_results() -> None:
                 "ssl_valid": True,
                 "ai_summary": "ok",
                 "analysis_payload": {"scan_id": "scan_123"},
+            },
+            {
+                "id": "analysis_2",
+                "created_at": created_recently,
+                "scan_event_id": "event_2",
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "registrable_domain": "danger.example.com",
+                "risk_score": 95,
+                "risk_level": "danger",
+                "flagged_safe_browsing": True,
+                "flagged_threat_intel": False,
+                "typosquatting_detected": False,
+                "domain_age_days": 1,
+                "redirect_hops": 2,
+                "ssl_valid": True,
+                "ai_summary": "danger",
+                "analysis_payload": {"scan_id": "scan_234"},
+            },
+            {
+                "id": "analysis_3",
+                "created_at": within_hour,
+                "scan_event_id": "event_3",
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "registrable_domain": "danger.example.com",
+                "risk_score": 98,
+                "risk_level": "danger",
+                "flagged_safe_browsing": True,
+                "flagged_threat_intel": False,
+                "typosquatting_detected": False,
+                "domain_age_days": 1,
+                "redirect_hops": 3,
+                "ssl_valid": True,
+                "ai_summary": "danger",
+                "analysis_payload": {"scan_id": "scan_235"},
+            },
+            {
+                "id": "analysis_4",
+                "created_at": within_hour,
+                "scan_event_id": "event_4",
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "registrable_domain": "danger.example.com",
+                "risk_score": 99,
+                "risk_level": "danger",
+                "flagged_safe_browsing": True,
+                "flagged_threat_intel": False,
+                "typosquatting_detected": False,
+                "domain_age_days": 1,
+                "redirect_hops": 4,
+                "ssl_valid": True,
+                "ai_summary": "danger",
+                "analysis_payload": {"scan_id": "scan_236"},
+            },
+            {
+                "id": "analysis_5",
+                "created_at": within_hour,
+                "scan_event_id": "event_5",
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "registrable_domain": "danger.example.com",
+                "risk_score": 92,
+                "risk_level": "danger",
+                "flagged_safe_browsing": True,
+                "flagged_threat_intel": False,
+                "typosquatting_detected": False,
+                "domain_age_days": 1,
+                "redirect_hops": 2,
+                "ssl_valid": True,
+                "ai_summary": "danger",
+                "analysis_payload": {"scan_id": "scan_237"},
+            },
+            {
+                "id": "analysis_6",
+                "created_at": within_hour,
+                "scan_event_id": "event_6",
+                "organization_id": "org_123",
+                "protected_link_id": "plink_2",
+                "qr_code_id": "plink_2",
+                "registrable_domain": "danger.example.com",
+                "risk_score": 93,
+                "risk_level": "danger",
+                "flagged_safe_browsing": True,
+                "flagged_threat_intel": False,
+                "typosquatting_detected": False,
+                "domain_age_days": 1,
+                "redirect_hops": 2,
+                "ssl_valid": True,
+                "ai_summary": "danger",
+                "analysis_payload": {"scan_id": "scan_238"},
             },
             {
                 "id": "analysis_old",
@@ -234,7 +427,7 @@ async def test_repository_queries_return_typed_results() -> None:
     try:
         created = await repository.create_protected_link(
             CreateProtectedLinkInput(
-                token="tok_2",
+                token="tok_3",
                 original_url="https://example.org",
                 normalized_url="https://example.org",
                 label="Kitchen",
@@ -244,6 +437,9 @@ async def test_repository_queries_return_typed_results() -> None:
         looked_up = await repository.get_protected_link_by_token("tok_1")
         overview = await repository.get_dashboard_overview(days=7)
         recent = await repository.list_recent_scans(limit=10)
+        filtered_recent = await repository.list_recent_scans(
+            DashboardScansQuery(verdict="danger", domain="danger.example.com", limit=10)
+        )
         links = await repository.list_protected_links(
             ProtectedLinksListParams(organization_id="org_123")
         )
@@ -255,12 +451,20 @@ async def test_repository_queries_return_typed_results() -> None:
 
     assert isinstance(created, ProtectedLinkRecord)
     assert looked_up is not None and looked_up.token == "tok_1"
-    assert overview.metrics.total_scans == 1
+    assert overview.metrics.total_scans == 6
     assert overview.metrics.safe_count == 1
+    assert overview.metrics.dangerous_count == 5
     assert overview.metrics.latest_verdict == "safe"
+    assert overview.metrics.recent_activity.last_24h_total == 6
     assert recent[0].protected_link_label == "Front Door"
-    assert len(links) == 2
-    assert alerts[0].title == "Suspicious scan"
+    assert all(item.risk_level == "danger" for item in filtered_recent)
+    assert len(filtered_recent) == 5
+    assert len(links) == 3
+    warehouse = next(item for item in links if item.id == "plink_2")
+    assert warehouse.scan_count == 5
+    assert warehouse.dangerous_scan_count == 5
+    assert alerts[0].source in {"persisted", "derived"}
+    assert any(item.source == "derived" for item in alerts)
 
 
 def test_dashboard_route_uses_repository_overview_query() -> None:
@@ -277,9 +481,15 @@ def test_dashboard_route_uses_repository_overview_query() -> None:
                     "total_scans": 8,
                     "safe_count": 5,
                     "suspicious_count": 2,
-                    "malicious_count": 1,
+                    "dangerous_count": 1,
                     "unknown_count": 0,
                     "latest_verdict": "suspicious",
+                    "recent_activity": {
+                        "last_24h_total": 4,
+                        "last_24h_safe": 2,
+                        "last_24h_suspicious": 1,
+                        "last_24h_dangerous": 1,
+                    },
                 },
                 message="loaded",
             )
@@ -295,3 +505,80 @@ def test_dashboard_route_uses_repository_overview_query() -> None:
     body = response.json()
     assert body["data"]["metrics"]["total_scans"] == 8
     assert body["data"]["metrics"]["latest_verdict"] == "suspicious"
+    assert body["data"]["metrics"]["recent_activity"]["last_24h_total"] == 4
+
+
+def test_dashboard_routes_return_scans_links_and_alerts() -> None:
+    """Dashboard list routes should return frontend-friendly JSON."""
+
+    app = create_application()
+
+    class _FakeRepository:
+        async def list_recent_scans(self, params):
+            assert params.verdict == "danger"
+            return [
+                {
+                    "id": "scan_1",
+                    "created_at": datetime.now(UTC),
+                    "scanned_url": "https://danger.example.com",
+                    "qr_code_id": "plink_1",
+                    "risk_level": "danger",
+                    "registrable_domain": "danger.example.com",
+                }
+            ]
+
+        async def list_protected_links(self, params):
+            assert params.limit == 10
+            return [
+                {
+                    "id": "plink_1",
+                    "token": "tok_1",
+                    "original_url": "https://example.com",
+                    "normalized_url": "https://example.com",
+                    "label": "Front Door",
+                    "organization_id": "org_123",
+                    "is_active": True,
+                    "scan_count": 7,
+                    "dangerous_scan_count": 2,
+                    "suspicious_scan_count": 1,
+                    "last_scanned_at": datetime.now(UTC),
+                }
+            ]
+
+        async def list_alerts(self, params):
+            assert params.limit == 10
+            return [
+                {
+                    "id": "alert_1",
+                    "created_at": datetime.now(UTC),
+                    "source": "derived",
+                    "alert_type": "dangerous_scan_spike",
+                    "severity": "critical",
+                    "status": "open",
+                    "title": "Dangerous scan spike detected",
+                    "message": "Five or more dangerous scans were observed in the last hour.",
+                    "count": 5,
+                    "metadata": {"window": "1h"},
+                }
+            ]
+
+    app.dependency_overrides[get_supabase_repository] = lambda: _FakeRepository()
+
+    with TestClient(app) as client:
+        scans_response = client.get("/api/dashboard/scans?verdict=danger")
+        links_response = client.get("/api/dashboard/links?limit=10")
+        alerts_response = client.get("/api/dashboard/alerts?limit=10")
+
+    app.dependency_overrides.clear()
+
+    assert scans_response.status_code == 200
+    assert scans_response.json()["data"]["total"] == 1
+    assert scans_response.json()["data"]["items"][0]["registrable_domain"] == "danger.example.com"
+
+    assert links_response.status_code == 200
+    assert links_response.json()["data"]["items"][0]["scan_count"] == 7
+
+    assert alerts_response.status_code == 200
+    alerts_body = alerts_response.json()
+    assert alerts_body["data"]["items"][0]["source"] == "derived"
+    assert alerts_body["data"]["items"][0]["count"] == 5
