@@ -12,7 +12,8 @@ router = APIRouter(prefix="", tags=["scan"])
 async def scan_url(request: Request, payload: ScanRequest) -> ScanDecisionResponse:
     # Same normalization + analysis pipeline used by /go to keep behavior aligned.
     normalized_url = normalize_url(payload.url)
-    analysis = analyze_url(normalized_url)
+    outcome = analyze_url(normalized_url, include_destination=True)
+    analysis = outcome.analysis
 
     # Persist signals for analytics even when caller only wants JSON response.
     scan_row = {
@@ -37,7 +38,7 @@ async def scan_url(request: Request, payload: ScanRequest) -> ScanDecisionRespon
     reason = "Allowed by risk policy." if allowed else "Blocked by risk policy."
     return ScanDecisionResponse(
         allowed=allowed,
-        destination=normalized_url,
+        destination=outcome.destination_url,
         reason=reason,
         analysis=analysis,
     )

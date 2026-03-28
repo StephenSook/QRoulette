@@ -16,7 +16,8 @@ router = APIRouter(prefix="", tags=["redirect"])
 async def protected_redirect(request: Request, url: str, qr_code_id: str | None = None) -> Any:
     query = ScanRequest(url=url, qr_code_id=qr_code_id)
     normalized_url = normalize_url(query.url)
-    analysis = analyze_url(normalized_url)
+    outcome = analyze_url(normalized_url, include_destination=True)
+    analysis = outcome.analysis
 
     # Always log before allowing/blocking so dashboard captures every scan attempt.
     scan_row = {
@@ -53,7 +54,7 @@ async def protected_redirect(request: Request, url: str, qr_code_id: str | None 
             else "Allowed by risk policy."
         ),
         analysis=analysis,
-        destination=normalized_url,
+        destination=outcome.destination_url,
     )
 
     if not decision.allowed:
@@ -64,4 +65,4 @@ async def protected_redirect(request: Request, url: str, qr_code_id: str | None 
         )
 
     # Safe URLs continue through normal browsing flow.
-    return RedirectResponse(url=normalized_url, status_code=307)
+    return RedirectResponse(url=outcome.destination_url, status_code=307)

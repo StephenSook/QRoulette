@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from urllib.parse import urlparse
 from fastapi import HTTPException
 
@@ -55,6 +56,12 @@ STATIC_ASSET_EXTENSIONS = (
 )
 
 
+@dataclass(frozen=True)
+class AnalysisOutcome:
+    analysis: RiskAnalysis
+    destination_url: str
+
+
 def _is_high_entropy_label(host: str) -> bool:
     """
     Detect machine-generated first labels used by ephemeral phishing tunnels.
@@ -99,7 +106,11 @@ def normalize_url(raw_url: str) -> str:
     return candidate
 
 
-def analyze_url(url: str) -> RiskAnalysis:
+def analyze_url(
+    url: str,
+    *,
+    include_destination: bool = False,
+) -> RiskAnalysis | AnalysisOutcome:
     # Central risk pipeline used by both /scan and /go.
     # Integrations from teammate modules should continue to feed this contract.
     parsed = urlparse(url)
@@ -287,7 +298,7 @@ def analyze_url(url: str) -> RiskAnalysis:
             reasons.append(f"Threat intel feed: {reason}")
 
     ai_summary = summarize_risk(url, risk_level, reasons)
-    return RiskAnalysis(
+    analysis = RiskAnalysis(
         risk_score=risk_score,
         risk_level=risk_level,
         flagged_safe_browsing=safe_browsing_matched,
@@ -298,3 +309,9 @@ def analyze_url(url: str) -> RiskAnalysis:
         ssl_valid=ssl_valid,
         ai_summary=ai_summary,
     )
+    if include_destination:
+        return AnalysisOutcome(
+            analysis=analysis,
+            destination_url=target_url,
+        )
+    return analysis

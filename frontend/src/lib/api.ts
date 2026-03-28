@@ -17,7 +17,7 @@ export interface RiskAnalysis {
 
 export interface ScanDecisionResponse {
   allowed: boolean;
-  destination: string;
+  destination: string; // Resolved final URL after redirects.
   reason: string;
   analysis: RiskAnalysis;
 }

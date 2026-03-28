@@ -231,6 +231,25 @@ class ScanAnalysisService(ServiceStub):
             has_cross_domain_redirect=redirects_result.has_cross_domain_redirect,
         )
 
+    async def _build_effective_analysis(
+        self,
+        *,
+        original_analysis,
+        redirects_result: RedirectsResult,
+    ):
+        """Analyze the resolved destination when redirect inspection finds one."""
+
+        if not redirects_result.available:
+            return original_analysis
+
+        resolved_url = redirects_result.final_url
+        if resolved_url == str(original_analysis.normalized_url):
+            return original_analysis
+
+        effective_analysis = await self.url_analysis_service.analyze_url(resolved_url)
+        effective_analysis.input_url = original_analysis.input_url
+        return effective_analysis
+
     async def analyze_scan(
         self,
         url: str,
@@ -241,21 +260,26 @@ class ScanAnalysisService(ServiceStub):
         scan_id = str(uuid4())
         self.logger.info("scan_started url=%s", url, extra={"scan_id": scan_id})
 
-        analysis = await self.url_analysis_service.analyze_url(url)
+        original_analysis = await self.url_analysis_service.analyze_url(url)
+        original_normalized_url = str(original_analysis.normalized_url)
+
+        redirects_result = await self._run_redirects(scan_id, original_normalized_url)
+        analysis = await self._build_effective_analysis(
+            original_analysis=original_analysis,
+            redirects_result=redirects_result,
+        )
+        self._apply_redirect_result(analysis, redirects_result)
         normalized_url = str(analysis.normalized_url)
         registrable_domain = analysis.registrable_domain
         hostname = analysis.normalized_hostname
 
-        safe_browsing_result, whois_result, reputation_result, threat_intel_result, ssl_info_result, redirects_result = await asyncio.gather(
+        safe_browsing_result, whois_result, reputation_result, threat_intel_result, ssl_info_result = await asyncio.gather(
             self._run_safe_browsing(scan_id, normalized_url),
             self._run_whois(scan_id, registrable_domain),
             self._run_reputation(scan_id, normalized_url),
             self._run_threat_intel(scan_id, normalized_url),
             self._run_ssl_info(scan_id, hostname),
-            self._run_redirects(scan_id, normalized_url),
         )
-
-        self._apply_redirect_result(analysis, redirects_result)
 
         risk = calculate_risk_score(
             ScoringInputs(

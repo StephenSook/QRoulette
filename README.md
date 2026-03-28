@@ -30,7 +30,7 @@ Open docs at `http://127.0.0.1:8000/docs`.
     - `qr_code_id` (string, optional)
   - Response:
     - `allowed` (boolean)
-    - `destination` (string)
+    - `destination` (string, resolved final URL after redirects)
     - `reason` (string)
     - `analysis` object:
       - `risk_score` (0-100)
@@ -39,13 +39,13 @@ Open docs at `http://127.0.0.1:8000/docs`.
       - `flagged_threat_intel` (boolean)
       - `typosquatting_detected` (boolean)
       - `domain_age_days` (integer or null)
-      - `redirect_hops` (integer)
+      - `redirect_hops` (integer, based on the observed redirect chain)
       - `ssl_valid` (boolean)
       - `ai_summary` (string)
 
 - `GET /go?url=...&qr_code_id=...`
   - Logs scan attempt to Supabase.
-  - If safe: returns `307` redirect to destination.
+  - If safe: returns `307` redirect to the resolved final destination.
   - If danger: returns `403` with same decision payload shape as `POST /scan`.
 
 - `GET /dashboard/summary`

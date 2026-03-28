@@ -13,6 +13,7 @@ from app.core.logging import get_logger
 from app.core.scoring import ScoringInputs, calculate_risk_score
 from app.schemas.redirects import RedirectsResult
 from app.schemas.reputation import ReputationResult
+from app.schemas.safe_browsing import SafeBrowsingResult
 from app.schemas.scan import ScanAnalyzeResponse
 from app.schemas.ssl_info import SSLInfoResult
 from app.schemas.threat_intel import ThreatIntelResult
@@ -118,6 +119,110 @@ async def test_scan_analysis_service_tolerates_partial_failures() -> None:
     assert result.risk.verdict == "dangerous"
     assert result.explanation == result.risk.summary
     assert result.persisted is False
+
+
+@pytest.mark.anyio
+async def test_scan_analysis_service_checks_final_redirect_destination() -> None:
+    """Downstream providers should inspect the resolved destination, not the entry URL."""
+
+    final_url = "https://downloads.example.net/update.pkg"
+    observed: dict[str, list[str]] = {
+        "safe_browsing": [],
+        "whois": [],
+        "reputation": [],
+        "threat_intel": [],
+        "ssl": [],
+    }
+
+    class _SpySafeBrowsingService:
+        async def check_url(self, url: str):
+            observed["safe_browsing"].append(url)
+            return SafeBrowsingResult(
+                matched=url == final_url,
+                threat_types=["MALWARE"] if url == final_url else [],
+                raw_response={"checked_url": url},
+            )
+
+    class _SpyWhoisService:
+        async def lookup_domain(self, domain: str):
+            observed["whois"].append(domain)
+            return WhoisResult(
+                domain=domain,
+                available=True,
+                found=True,
+                domain_age_days=3,
+            )
+
+    class _SpyReputationService:
+        async def score_url(self, url: str):
+            observed["reputation"].append(url)
+            return ReputationResult(
+                url=url,
+                available=True,
+                score=15,
+                verdict=Verdict.MALICIOUS,
+                reasons=["Resolved destination reputation is poor."],
+            )
+
+    class _SpyThreatIntelService:
+        async def lookup_indicators(self, url: str):
+            observed["threat_intel"].append(url)
+            return ThreatIntelResult(
+                url=url,
+                available=True,
+                matched=False,
+            )
+
+    class _SpySSLInfoService:
+        async def inspect_host(self, host: str):
+            observed["ssl"].append(host)
+            return SSLInfoResult(
+                host=host,
+                available=True,
+                has_tls=True,
+                verdict=Verdict.SAFE,
+            )
+
+    class _RedirectsToFinalService:
+        async def inspect_chain(self, url: str):
+            return RedirectsResult(
+                input_url=url,
+                final_url=final_url,
+                available=True,
+                hop_count=1,
+                classification="normal",
+            )
+
+    context = ServiceContext(client=httpx.AsyncClient(), settings=Settings())
+    service = ScanAnalysisService(
+        context,
+        url_analysis_service=_StaticUrlAnalysisService(),
+        safe_browsing_service=_SpySafeBrowsingService(),
+        whois_service=_SpyWhoisService(),
+        reputation_service=_SpyReputationService(),
+        threat_intel_service=_SpyThreatIntelService(),
+        ssl_info_service=_SpySSLInfoService(),
+        redirects_service=_RedirectsToFinalService(),
+        gemini_service=_FailingGeminiService(),
+        supabase_repository=_FailingSupabaseRepository(),
+        logger=get_logger("qroulette.test.scan_analysis"),
+    )
+
+    try:
+        result = await service.analyze_scan("https://short.example/go")
+    finally:
+        await context.client.aclose()
+
+    assert observed["safe_browsing"] == [final_url]
+    assert observed["whois"] == ["example.net"]
+    assert observed["reputation"] == [final_url]
+    assert observed["threat_intel"] == [final_url]
+    assert observed["ssl"] == ["downloads.example.net"]
+    assert str(result.analysis.input_url) == "https://short.example/go"
+    assert str(result.analysis.normalized_url) == final_url
+    assert str(result.analysis.redirect_result.final_url) == final_url
+    assert result.risk.flagged_safe_browsing is True
+    assert result.risk.verdict == "dangerous"
 
 
 def _build_route_response(url: str) -> ScanAnalyzeResponse:
