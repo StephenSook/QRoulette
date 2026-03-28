@@ -1,31 +1,50 @@
-# Google safe browsing API
-# backend/services/safe_browsing.py
-
 import os
-import requests
+from typing import Any
+
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
-GOOGLE_SAFE_BROWSING_API_KEY = os.getenv("GOOGLE_SAFE_API_KEY")
 
-SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v5/threatMatches:find"
+SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v5/urls:search"
 
-def check_safe_browsing(url: str) -> dict:
-    if not GOOGLE_SAFE_BROWSING_API_KEY:
-        raise ValueError("Google Safe Browsing API key not found")
+
+def check_safe_browsing(url: str) -> dict[str, Any]:
+    """Return Safe Browsing lookup result using Google v5 direct URL search."""
+    api_key = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY") or os.getenv("GOOGLE_SAFE_API_KEY")
+    if not api_key:
+        return {
+            "matched": False,
+            "threat_types": [],
+            "error": "GOOGLE_SAFE_BROWSING_API_KEY is missing.",
+        }
+
     try:
-        response = requests.get(
+        response = httpx.get(
             SAFE_BROWSING_URL,
-            params={"key": GOOGLE_SAFE_BROWSING_API_KEY, "urls": url},
-            timeout = 5
+            params={"key": api_key, "urls[]": url},
+            timeout=5.0,
         )
         response.raise_for_status()
-        data = response.json()
+        payload = response.json()
+    except httpx.HTTPError as exc:
+        return {
+            "matched": False,
+            "threat_types": [],
+            "error": f"Safe Browsing request failed: {exc}",
+        }
 
-        if "threats" in data:
-            flags = [f"Safe Browsing: {t['threatType']} detected" for t in data["threats"]]
-            return {"score": 5, "flags": flags}
-        else:
-            return {"score": 0, "flags": []}
-    except requests.RequestException as e:
-        return {"score": 1, "flags": [f"Safe Browsing API error: {e}"]}
+    threats = payload.get("threats", []) or []
+    threat_types = sorted(
+        {
+            threat_type
+            for threat in threats
+            for threat_type in threat.get("threatTypes", [])
+            if isinstance(threat_type, str)
+        }
+    )
+    return {
+        "matched": bool(threats),
+        "threat_types": threat_types,
+        "error": None,
+    }

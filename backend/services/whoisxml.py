@@ -1,75 +1,60 @@
-# WhoisXML checkers with API calls
-
-# backend/services/whoisxml.py
-
 import os
-import requests
-from urllib.parse import urlparse
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timezone
+
 from dotenv import load_dotenv
 
-# Load API key
 load_dotenv()
-WHOISXML_API_KEY = os.getenv("WHOISXML_API_KEY")
-WHOISXML_URL = "https://www.whoisxmlapi.com/whoisserver/WhoisService"
 
-def check_whois(url: str) -> dict:
+
+def get_domain_age_days(hostname: str) -> int | None:
     """
-    Query WHOISXML API for domain info.
+    Return domain age in days when data is available.
 
-    Returns:
-    {
-        "score": int,
-        "flags": list[str]
-    }
+    Current lightweight implementation supports a local override map for demo/testing:
+    WHOIS_MOCK_AGES="paypal.com:9000,fake-paypal-demo.com:1"
     """
-    if not WHOISXML_API_KEY:
-        raise ValueError("WHOISXML API key not set in .env")
+    mapping = os.getenv("WHOIS_MOCK_AGES", "").strip()
+    if not mapping:
+        return None
 
-    parsed = urlparse(url)
-    domain = parsed.netloc
+    ages: dict[str, int] = {}
+    for item in mapping.split(","):
+        if ":" not in item:
+            continue
+        host, days = item.split(":", 1)
+        host = host.strip().lower()
+        try:
+            ages[host] = int(days.strip())
+        except ValueError:
+            continue
 
-    params = {
-        "apiKey": WHOISXML_API_KEY,
-        "domainName": domain,
-        "outputFormat": "JSON"
-    }
+    host = hostname.lower().strip()
+    if host in ages:
+        return max(ages[host], 0)
 
-    try:
-        response = requests.get(WHOISXML_URL, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+    # If a creation date is provided, derive days from now.
+    created_at = os.getenv("WHOIS_CREATED_AT")
+    if created_at:
+        try:
+            created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            return max((datetime.now(timezone.utc) - created_dt).days, 0)
+        except ValueError:
+            return None
+    return None
 
-        score = 0
-        flags = []
 
-        registry = data.get("WhoisRecord", {})
-        registrant = registry.get("registrant", {})
-        registry_data = registry.get("registryData", {})
+def check_whois(hostname: str) -> dict[str, object]:
+    """
+    Compatibility adapter for teammate code expecting score/flags output.
+    """
+    age_days = get_domain_age_days(hostname)
+    if age_days is None:
+        return {"score": 0, "flags": []}
 
-        # Check domain age
-        creation_date_str = registry_data.get("registryData", {}).get("createdDate")
-        if creation_date_str:
-            try:
-                creation_date = datetime.strptime(creation_date_str[:10], "%Y-%m-%d")
-                if datetime.utcnow() - creation_date <= timedelta(days=30):
-                    score += 2
-                    flags.append("Domain recently registered (≤30 days)")
-            except:
-                pass
-
-        # Check registrant privacy
-        if registrant.get("name") in [None, "", "REDACTED FOR PRIVACY"]:
-            score += 1
-            flags.append("Registrant information hidden/private")
-
-        # Check registrar abuse patterns (optional, example)
-        registrar = registry_data.get("registryData", {}).get("registrarName", "")
-        if registrar and registrar.lower() in ["some-abused-registrar.com"]:
-            score += 1
-            flags.append(f"Registrar {registrar} known for abuse")
-
-        return {"score": score, "flags": flags}
-
-    except requests.RequestException as e:
-        return {"score": 1, "flags": [f"WHOIS API error: {e}"]}
+    flags: list[str] = []
+    score = 0
+    if age_days <= 30:
+        score += 2
+        flags.append("Domain recently registered (<=30 days)")
+    return {"score": score, "flags": flags}

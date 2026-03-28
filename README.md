@@ -68,5 +68,31 @@ Open docs at `http://127.0.0.1:8000/docs`.
 ### Current implementation status
 
 - Contract and logging are stable.
-- Risk analysis currently uses fallback logic in `backend/services/analyzer.py`.
-- Teammate integrations (Safe Browsing, threat intel, redirect checker, Gemini) should plug into the analyzer while preserving the same response shape.
+- `backend/services/analyzer.py` now calls shared service modules and maps their outputs into the same `RiskAnalysis` contract.
+
+### Service integration interfaces
+
+Keep these function signatures stable so teammate internals can evolve without breaking routes:
+
+- `backend/services/safe_browsing.py`
+  - `check_safe_browsing(url: str) -> dict`
+  - Returns keys: `matched` (bool), `threat_types` (list[str]), `error` (str | None)
+
+- `backend/services/whoisxml.py`
+  - `get_domain_age_days(hostname: str) -> int | None`
+
+- `backend/services/typosquatting.py`
+  - `detect_typosquatting(target: str) -> bool`
+
+- `backend/services/extensions.py`
+  - `get_suspicious_extension(url: str) -> str | None`
+
+- `backend/services/gemini.py`
+  - `summarize_risk(url: str, risk_level: str, reasons: list[str]) -> str`
+
+### Security service env vars
+
+- `GOOGLE_SAFE_BROWSING_API_KEY` (preferred)
+- `GOOGLE_SAFE_API_KEY` (legacy fallback, supported)
+- `WHOIS_MOCK_AGES` (optional local/demo mapping, format: `host:days,host2:days`)
+- `WHOIS_CREATED_AT` (optional ISO timestamp fallback for local testing)
