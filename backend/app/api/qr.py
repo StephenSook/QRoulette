@@ -3,20 +3,33 @@
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import get_qr_generator_service
-from app.schemas.qr import QRGenerateRequest, QRGenerateResponse
+from app.schemas.common import ApiErrorResponse, ApiSuccessResponse, success_response
+from app.schemas.qr import QRCreateRequest, QRCreateResponse
 from app.services.qr_generator import QRGeneratorService
 
 router = APIRouter(prefix="/qr", tags=["qr"])
 
 
-@router.post("/generate", response_model=QRGenerateResponse, status_code=status.HTTP_202_ACCEPTED)
-async def generate_qr_code(
-    payload: QRGenerateRequest,
+@router.post(
+    "/create",
+    response_model=ApiSuccessResponse[QRCreateResponse],
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        400: {"model": ApiErrorResponse},
+        500: {"model": ApiErrorResponse},
+    },
+)
+async def create_qr_code(
+    payload: QRCreateRequest,
     service: QRGeneratorService = Depends(get_qr_generator_service),
-) -> QRGenerateResponse:
+) -> ApiSuccessResponse[QRCreateResponse]:
     """Accept a QR generation request without executing business logic yet."""
 
     _ = service
-    return QRGenerateResponse(
-        message=f"TODO: implement QR generation for {payload.url}",
+    return success_response(
+        QRCreateResponse(
+            url=payload.url,
+            size=payload.size,
+            message=f"TODO: implement QR generation for {payload.url}",
+        )
     )

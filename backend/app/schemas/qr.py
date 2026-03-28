@@ -1,17 +1,21 @@
 """Schemas for QR endpoints."""
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import Field
+
+from app.schemas.common import SchemaModel, WebUrl
 
 
-class QRGenerateRequest(BaseModel):
-    """Request payload for QR generation."""
+class QRCreateRequest(SchemaModel):
+    """Request payload for `POST /api/qr/create`."""
 
-    url: HttpUrl
-    size: int = 256
+    url: WebUrl
+    size: int = Field(default=256, ge=128, le=2048)
 
 
-class QRGenerateResponse(BaseModel):
-    """Placeholder response for QR generation."""
+class QRCreateResponse(SchemaModel):
+    """Response payload for `POST /api/qr/create`."""
 
+    url: WebUrl
+    size: int
     status: str = "accepted"
-    message: str
+    message: str = "TODO: implement QR creation workflow."

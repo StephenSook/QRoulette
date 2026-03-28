@@ -1,16 +1,17 @@
 """Schemas for scan endpoints."""
 
-from pydantic import BaseModel, HttpUrl
+from app.schemas.common import SchemaModel, WebUrl
+from app.schemas.domain import UrlAnalysisResult
 
 
-class ScanRequest(BaseModel):
-    """Request payload for a URL scan."""
+class ScanAnalyzeRequest(SchemaModel):
+    """Request payload for `POST /api/scan/analyze`."""
 
-    url: HttpUrl
+    url: WebUrl
 
 
-class ScanResponse(BaseModel):
-    """Placeholder response for scan operations."""
+class ScanAnalyzeResponse(SchemaModel):
+    """Response payload for `POST /api/scan/analyze`."""
 
-    status: str = "queued"
-    message: str
+    analysis: UrlAnalysisResult
+    message: str = "TODO: implement URL analysis workflow."
