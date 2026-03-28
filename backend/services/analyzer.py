@@ -1,5 +1,4 @@
 from urllib.parse import urlparse
-
 from fastapi import HTTPException
 
 from models.contracts import RiskAnalysis
