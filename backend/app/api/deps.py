@@ -4,6 +4,7 @@ from fastapi import Request
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.protected_links import ProtectedLinksService
 from app.services.base import ServiceContext
 from app.services.gemini import GeminiService
 from app.services.qr_generator import QRGeneratorService
@@ -103,4 +104,29 @@ def get_scan_analysis_service(request: Request) -> ScanAnalysisService:
         gemini_service=GeminiService(context),
         supabase_repository=SupabaseRepository(context),
         logger=get_logger("qroulette.scan_analysis"),
+    )
+
+
+def get_protected_links_service(request: Request) -> ProtectedLinksService:
+    """Return the protected-links orchestration service."""
+
+    context = get_service_context(request)
+    repository = SupabaseRepository(context)
+    return ProtectedLinksService(
+        context,
+        repository=repository,
+        qr_generator_service=QRGeneratorService(context),
+        scan_analysis_service=ScanAnalysisService(
+            context,
+            url_analysis_service=URLAnalysisService(context),
+            safe_browsing_service=SafeBrowsingService(context),
+            whois_service=WhoisService(context),
+            reputation_service=ReputationService(context),
+            threat_intel_service=ThreatIntelService(context),
+            ssl_info_service=SSLInfoService(context),
+            redirects_service=RedirectsService(context),
+            gemini_service=GeminiService(context),
+            supabase_repository=repository,
+            logger=get_logger("qroulette.scan_analysis"),
+        ),
     )
