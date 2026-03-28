@@ -52,9 +52,53 @@ class Settings(BaseSettings):
         validation_alias="GOOGLE_SAFE_BROWSING_API_KEY",
     )
     whois_xml_api_key: str = Field(default="", validation_alias="WHOIS_XML_API_KEY")
+    whois_base_url: str = Field(
+        default="https://www.whoisxmlapi.com/whoisserver/WhoisService",
+        validation_alias="WHOIS_BASE_URL",
+    )
+    whois_timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        validation_alias="WHOIS_TIMEOUT_SECONDS",
+    )
+    reputation_api_key: str = Field(default="", validation_alias="REPUTATION_API_KEY")
+    reputation_base_url: str = Field(
+        default="",
+        validation_alias="REPUTATION_BASE_URL",
+    )
+    reputation_timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        validation_alias="REPUTATION_TIMEOUT_SECONDS",
+    )
+    threat_intel_api_key: str = Field(
+        default="",
+        validation_alias="THREAT_INTEL_API_KEY",
+    )
+    threat_intel_base_url: str = Field(
+        default="",
+        validation_alias="THREAT_INTEL_BASE_URL",
+    )
+    threat_intel_timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        validation_alias="THREAT_INTEL_TIMEOUT_SECONDS",
+    )
+    ssl_info_api_key: str = Field(default="", validation_alias="SSL_INFO_API_KEY")
+    ssl_info_base_url: str = Field(default="", validation_alias="SSL_INFO_BASE_URL")
+    ssl_info_timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        validation_alias="SSL_INFO_TIMEOUT_SECONDS",
+    )
     redirect_chain_api_key: str = Field(
         default="",
         validation_alias="REDIRECT_CHAIN_API_KEY",
+    )
+    redirects_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        validation_alias="REDIRECTS_TIMEOUT_SECONDS",
     )
     supabase_url: str = Field(default="", validation_alias="SUPABASE_URL")
     supabase_key: str = Field(default="", validation_alias="SUPABASE_KEY")
