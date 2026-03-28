@@ -13,6 +13,27 @@ SUSPICIOUS_EXTENSIONS = {
     ".vbs",
     ".ps1",
     ".zip",
+    ".pif",
+    ".iso",
+    ".jar",
+    ".ws",
+    ".app",
+    ".command",
+    ".sh",
+    ".rb",
+    ".py",
+    ".docm",
+    ".xlsm",
+    ".pptm",
+    ".lnk",
+    ".hta",
+    ".cpl",
+    ".gadget",
+    ".vb",
+    ".wsf",
+    ".hta",
+    ".reg",
+    ".scf"
 }
 
 
