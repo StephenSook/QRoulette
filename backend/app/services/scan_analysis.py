@@ -231,7 +231,11 @@ class ScanAnalysisService(ServiceStub):
             has_cross_domain_redirect=redirects_result.has_cross_domain_redirect,
         )
 
-    async def analyze_scan(self, url: str) -> ScanAnalyzeResponse:
+    async def analyze_scan(
+        self,
+        url: str,
+        scan_metadata: dict[str, object] | None = None,
+    ) -> ScanAnalyzeResponse:
         """Run the main scan workflow and return the rich scan response."""
 
         scan_id = str(uuid4())
@@ -301,6 +305,14 @@ class ScanAnalysisService(ServiceStub):
                 "gemini": gemini_result.model_dump(mode="json"),
             },
         }
+        if scan_metadata:
+            persistence_payload.update(
+                {
+                    key: value
+                    for key, value in scan_metadata.items()
+                    if value is not None
+                }
+            )
         persistence_result = await self._persist_scan(
             scan_id=scan_id,
             payload=persistence_payload,

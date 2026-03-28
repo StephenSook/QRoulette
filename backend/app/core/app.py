@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.public_redirect import router as public_redirect_router
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.http import build_async_client
@@ -50,6 +51,7 @@ def create_application() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+    app.include_router(public_redirect_router)
 
     return app
 

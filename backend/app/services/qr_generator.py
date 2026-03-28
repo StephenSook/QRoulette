@@ -1,12 +1,16 @@
-"""QR generation service interface."""
+"""QR generation service for protected-link payloads."""
 
+from app.schemas.protected_links import QRArtifact
 from app.services.base import ServiceStub
 
 
 class QRGeneratorService(ServiceStub):
-    """Generate QR codes for URLs or stored scan results."""
+    """Generate QR artifacts for protected links."""
 
-    async def generate(self, url: str, size: int) -> dict:
-        """Return QR generation metadata for a URL."""
+    async def generate(self, protected_url: str) -> QRArtifact:
+        """Return MVP QR metadata while binary generation is deferred."""
 
-        await self.not_implemented(f"QR generation for {url} at size {size}")
+        return QRArtifact(
+            format="payload",
+            payload_value=protected_url,
+        )

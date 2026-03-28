@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.schemas.persistence import PersistenceResult
+from app.schemas.protected_links import ProtectedLinkRecord
 from app.services.base import ServiceStub
 
 
@@ -36,6 +37,14 @@ class SupabaseRepository(ServiceStub):
 
         self._client = create_client(url, key)
         return self._client
+
+    def _require_client(self):
+        """Return a configured Supabase client or raise a runtime error."""
+
+        client = self._build_client()
+        if client is None:
+            raise RuntimeError("Supabase is not configured.")
+        return client
 
     async def save_scan_result(self, payload: dict[str, Any]) -> PersistenceResult:
         """Persist a scan record when Supabase is configured."""
@@ -83,3 +92,31 @@ class SupabaseRepository(ServiceStub):
         """Return dashboard data from persistence."""
 
         await self.not_implemented("dashboard summary persistence")
+
+    async def create_protected_link(self, payload: dict[str, Any]) -> ProtectedLinkRecord:
+        """Persist a protected-link record and return the saved row."""
+
+        client = self._require_client()
+        response = await asyncio.to_thread(
+            lambda: client.table("protected_links").insert(payload).execute()
+        )
+        rows = response.data or []
+        if not rows:
+            raise RuntimeError("Supabase returned no inserted protected link row.")
+        return ProtectedLinkRecord.model_validate(rows[0])
+
+    async def get_protected_link_by_token(self, token: str) -> ProtectedLinkRecord | None:
+        """Fetch an active protected-link record by token."""
+
+        client = self._require_client()
+        response = await asyncio.to_thread(
+            lambda: client.table("protected_links")
+            .select("*")
+            .eq("token", token)
+            .limit(1)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return None
+        return ProtectedLinkRecord.model_validate(rows[0])

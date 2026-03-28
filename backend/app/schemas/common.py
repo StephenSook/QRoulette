@@ -57,3 +57,20 @@ def success_response(data: DataT) -> ApiSuccessResponse[DataT]:
     """Build the success response envelope."""
 
     return ApiSuccessResponse[DataT](data=data)
+
+
+def error_response(
+    *,
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> ApiErrorResponse:
+    """Build the error response envelope."""
+
+    return ApiErrorResponse(
+        error=ApiErrorDetail(
+            code=code,
+            message=message,
+            details=details,
+        )
+    )

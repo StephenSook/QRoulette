@@ -1,21 +1,5 @@
-"""Schemas for QR endpoints."""
+"""Backward-compatible exports for QR endpoint schemas."""
 
-from pydantic import Field
+from app.schemas.protected_links import QRArtifact, QRCreateRequest, QRCreateResponse
 
-from app.schemas.common import SchemaModel, WebUrl
-
-
-class QRCreateRequest(SchemaModel):
-    """Request payload for `POST /api/qr/create`."""
-
-    url: WebUrl
-    size: int = Field(default=256, ge=128, le=2048)
-
-
-class QRCreateResponse(SchemaModel):
-    """Response payload for `POST /api/qr/create`."""
-
-    url: WebUrl
-    size: int
-    status: str = "accepted"
-    message: str = "TODO: implement QR creation workflow."
+__all__ = ["QRArtifact", "QRCreateRequest", "QRCreateResponse"]
