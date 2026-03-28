@@ -11,6 +11,7 @@ from app.schemas.protected_links import (
     ProtectedRedirectOutcome,
     QRCreateResponse,
 )
+from app.schemas.repository import CreateProtectedLinkInput
 from app.services.base import ServiceStub
 from models.contracts import ScanDecisionResponse
 
@@ -65,14 +66,14 @@ class ProtectedLinksService(ServiceStub):
         if not normalized.hostname_ascii:
             raise InvalidProtectedLinkUrlError("Invalid URL.")
         record = await self.repository.create_protected_link(
-            {
-                "token": self._generate_token(),
-                "original_url": original_url.strip(),
-                "normalized_url": normalized.normalized_url,
-                "label": label.strip(),
-                "organization_id": organization_id,
-                "is_active": True,
-            }
+            CreateProtectedLinkInput(
+                token=self._generate_token(),
+                original_url=original_url.strip(),
+                normalized_url=normalized.normalized_url,
+                label=label.strip(),
+                organization_id=organization_id,
+                is_active=True,
+            )
         )
         protected_url = self._build_protected_url(base_url, record.token)
         artifact = await self.qr_generator_service.generate(protected_url)
