@@ -10,7 +10,7 @@ except ImportError:
 
 # --- Configuration ---
 
-SUSPICIOUS_TLDS = {"ru", "cn", "tk", "ml", "ga", "cf"}
+SUSPICIOUS_TLDS = {"ru", "cn", "tk", "ml", "ga", "cf", "life"}
 URL_SHORTENERS = {
     "bit.ly",
     "tinyurl.com",
@@ -20,7 +20,6 @@ URL_SHORTENERS = {
     "ow.ly",
     "is.gd",
 }
-
 
 # --- Helpers ---
 
