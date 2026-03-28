@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   RefreshCw,
@@ -10,11 +10,8 @@ import {
   QrCode,
   Eye,
 } from "lucide-react";
-import {
-  mockQREntries,
-  mockSecurityEvents,
-  mockDashboardMetrics,
-} from "@/lib/mock-data";
+import { getDashboardRecent, getDashboardSummary, type ScanRecord } from "@/lib/api";
+import type { DashboardMetrics, QRCodeEntry, SecurityEvent } from "@/lib/types";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 15 },
@@ -26,13 +23,94 @@ const fadeUp = {
 };
 
 export default function VaultPage() {
-  const metrics = mockDashboardMetrics;
+  const [metrics, setMetrics] = useState<DashboardMetrics>({
+    totalScans: 0,
+    scansTrend: 0,
+    threatsBlocked: 0,
+    threatsSeverity: "NORMAL",
+    activeManifests: 0,
+  });
+  const [entries, setEntries] = useState<QRCodeEntry[]>([]);
+  const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [systemClock, setSystemClock] = useState("--:--:--");
+  const [topCountries, setTopCountries] = useState<string>("No country data");
+
+  const mapRecentToView = (recent: ScanRecord[]) => {
+    const mappedEntries: QRCodeEntry[] = recent.map((row) => ({
+      id: row.id,
+      identifier: row.qr_code_id || `#SCAN-${row.id.slice(0, 6).toUpperCase()}`,
+      targetUrl: row.scanned_url,
+      protectedUrl: row.qr_code_id ? `qroulette.app/go?qr=${row.qr_code_id}` : "Direct scan",
+      scanCount: 1,
+      createdAt: row.created_at,
+      status: row.risk_level === "danger" ? "flagged" : "active",
+    }));
+
+    const mappedEvents: SecurityEvent[] = recent.slice(0, 8).map((row) => ({
+      id: `evt-${row.id}`,
+      message:
+        row.risk_level === "danger"
+          ? `Threat blocked for ${row.scanned_url}`
+          : row.risk_level === "suspicious"
+            ? `Suspicious scan reviewed for ${row.scanned_url}`
+            : `Safe scan passed for ${row.scanned_url}`,
+      type: row.risk_level === "danger" ? "threat" : row.risk_level === "safe" ? "success" : "info",
+      timestamp: new Date(row.created_at).toLocaleTimeString(),
+    }));
+
+    setEntries(mappedEntries);
+    setEvents(mappedEvents);
+    const countries = recent
+      .map((row) => row.country?.trim().toUpperCase())
+      .filter((c): c is string => Boolean(c));
+    const unique = Array.from(new Set(countries)).slice(0, 3);
+    setTopCountries(unique.length > 0 ? unique.join(", ") : "No country data");
+  };
+
+  const hydrateSummary = async (showToasts = false) => {
+    const [summary, recent] = await Promise.all([
+      getDashboardSummary(),
+      getDashboardRecent(25),
+    ]);
+
+    if (!summary || !recent) {
+      if (showToasts) setToast("Dashboard API unavailable — using cached data");
+      return;
+    }
+
+    setMetrics((prev) => ({
+      ...prev,
+      totalScans: summary.total,
+      threatsBlocked: summary.danger,
+      activeManifests: recent.length,
+      threatsSeverity:
+        summary.danger > 0 ? "CRITICAL" : summary.suspicious > 0 ? "ELEVATED" : "NORMAL",
+    }));
+    mapRecentToView(recent);
+    if (showToasts) setToast("Live dashboard summary synced");
+  };
+
+  useEffect(() => {
+    hydrateSummary(false);
+  }, []);
+
+  useEffect(() => {
+    const renderUtcClock = () =>
+      new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "UTC" });
+
+    setSystemClock(renderUtcClock());
+    const timer = setInterval(() => {
+      setSystemClock(renderUtcClock());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   const handleExportCsv = () => {
     const header = "ID,Identifier,Target URL,Protected URL,Scans,Created,Status";
-    const rows = mockQREntries.map((e) =>
+    const rows = entries.map((e) =>
       [e.id, e.identifier, e.targetUrl, e.protectedUrl, e.scanCount, e.createdAt, e.status].join(",")
     );
     const csv = [header, ...rows].join("\n");
@@ -51,10 +129,9 @@ export default function VaultPage() {
     if (isRefreshing) return;
     setIsRefreshing(true);
     setToast("Refreshing data...");
-    // Simulate refresh — will hit real API once backend is connected
-    setTimeout(() => {
+    setTimeout(async () => {
+      await hydrateSummary(true);
       setIsRefreshing(false);
-      setToast("Data refreshed — using cached data");
       setTimeout(() => setToast(null), 2000);
     }, 1500);
   };
@@ -128,7 +205,9 @@ export default function VaultPage() {
             <Scan className="w-4 h-4 text-accent-blue" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-black">1.2k</span>
+            <span className="text-4xl font-black">
+              {metrics.totalScans.toLocaleString()}
+            </span>
             <span className="text-sm text-accent-green font-bold">
               +{metrics.scansTrend}%
             </span>
@@ -220,7 +299,7 @@ export default function VaultPage() {
         </div>
 
         {/* Table Rows */}
-        {mockQREntries.map((entry, i) => (
+        {entries.map((entry, i) => (
           <motion.div
             key={entry.id}
             custom={i}
@@ -237,8 +316,8 @@ export default function VaultPage() {
         ))}
 
         <div className="px-4 py-2 flex items-center justify-between text-[10px] text-muted tracking-widest">
-          <span>RECORDS_SHOWN: 04</span>
-          <span>SYSTEM_CLK: {new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "UTC" })}_UTC</span>
+          <span>RECORDS_SHOWN: {entries.length.toString().padStart(2, "0")}</span>
+          <span>SYSTEM_CLK: {systemClock}_UTC</span>
         </div>
       </motion.div>
 
@@ -266,10 +345,10 @@ export default function VaultPage() {
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="bg-card/80 border border-card-border rounded px-3 py-2 text-center">
               <p className="text-[10px] text-muted tracking-widest">
-                LAT: 40.7128° N
+                TOP_COUNTRIES
               </p>
               <p className="text-[10px] text-muted tracking-widest">
-                LNG: 74.0060° W
+                {topCountries}
               </p>
             </div>
           </div>
@@ -286,7 +365,7 @@ export default function VaultPage() {
         <h2 className="text-sm font-bold tracking-wider uppercase">
           Security Event Log
         </h2>
-        {mockSecurityEvents.map((event) => (
+        {events.map((event) => (
           <div key={event.id} className="flex items-start gap-3">
             <div
               className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
@@ -306,7 +385,7 @@ export default function VaultPage() {
           </div>
         ))}
         <button className="w-full text-center text-[10px] text-muted tracking-[0.2em] uppercase hover:text-foreground transition-colors py-2">
-          View Full Log_001
+          Log entries loaded: {events.length}
         </button>
       </motion.div>
     </div>

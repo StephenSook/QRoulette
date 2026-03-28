@@ -1,4 +1,5 @@
 from typing import Any
+import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -37,17 +38,25 @@ async def protected_redirect(request: Request, url: str, qr_code_id: str | None 
     log_scan(scan_row)
 
     decision = ScanDecisionResponse(
-        allowed=analysis.risk_level != "danger",
+        allowed=analysis.risk_level == "safe"
+        or (
+            analysis.risk_level == "suspicious"
+            and os.getenv("ALLOW_SUSPICIOUS_REDIRECTS", "false").strip().lower() == "true"
+        ),
         reason=(
             "Blocked by risk policy."
             if analysis.risk_level == "danger"
+            or (
+                analysis.risk_level == "suspicious"
+                and os.getenv("ALLOW_SUSPICIOUS_REDIRECTS", "false").strip().lower() != "true"
+            )
             else "Allowed by risk policy."
         ),
         analysis=analysis,
         destination=normalized_url,
     )
 
-    if analysis.risk_level == "danger":
+    if not decision.allowed:
         # Return structured block payload that UI can render directly.
         return JSONResponse(
             status_code=403,

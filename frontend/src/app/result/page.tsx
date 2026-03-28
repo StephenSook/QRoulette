@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck,
@@ -16,24 +16,133 @@ import {
   Type,
 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { mockSafeResult, mockDangerResult } from "@/lib/mock-data";
+import { buildProtectedGoUrl, type ScanDecisionResponse } from "@/lib/api";
+import type { ScanResult } from "@/lib/types";
 
 function ResultContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const verdict = searchParams.get("verdict") || "safe";
+  const verdict = searchParams.get("verdict");
   const [showAiSummary, setShowAiSummary] = useState(false);
+  const [apiResult, setApiResult] = useState<ScanDecisionResponse | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
-  const result = verdict === "safe" ? mockSafeResult : mockDangerResult;
+  useEffect(() => {
+    const raw = sessionStorage.getItem("lastScanDecision");
+    if (!raw) {
+      setApiResult(null);
+      setHydrated(true);
+      return;
+    }
+    try {
+      setApiResult(JSON.parse(raw) as ScanDecisionResponse);
+    } catch {
+      setApiResult(null);
+    }
+    setHydrated(true);
+  }, []);
+
+  const result: ScanResult | null = useMemo(() => {
+    if (!apiResult) return null;
+
+    const analysis = apiResult.analysis;
+    const mappedVerdict =
+      analysis.risk_level === "danger"
+        ? "danger"
+        : analysis.risk_level === "suspicious"
+          ? "warning"
+          : "safe";
+
+    return {
+      id: `scan-${Date.now()}`,
+      url: apiResult.destination,
+      riskScore: analysis.risk_score,
+      verdict: mappedVerdict,
+      checks: [
+        {
+          name: "domain_age",
+          label: "DOMAIN AGE",
+          value:
+            analysis.domain_age_days === null
+              ? "Unknown"
+              : `${analysis.domain_age_days} Days`,
+          status:
+            analysis.domain_age_days !== null && analysis.domain_age_days <= 30
+              ? "warn"
+              : "pass",
+          icon: "clock",
+        },
+        {
+          name: "ssl_cert",
+          label: "SSL CERTIFICATE",
+          value: analysis.ssl_valid ? "Valid (HTTPS)" : "Missing/Invalid",
+          status: analysis.ssl_valid ? "pass" : "fail",
+          icon: "shield-check",
+        },
+        {
+          name: "typosquatting",
+          label: "TYPOSQUATTING",
+          value: analysis.typosquatting_detected ? "Detected" : "Not Detected",
+          status: analysis.typosquatting_detected ? "fail" : "pass",
+          icon: "type",
+        },
+        {
+          name: "phishing_db",
+          label: "SAFE BROWSING",
+          value: analysis.flagged_safe_browsing ? "MATCH" : "CLEAR",
+          status: analysis.flagged_safe_browsing ? "fail" : "pass",
+          icon: "database",
+        },
+      ],
+      aiSummary: analysis.ai_summary,
+      scannedAt: new Date().toISOString(),
+    };
+  }, [apiResult]);
+
+  if (hydrated && !result) {
+    return (
+      <div className="px-5 py-10 max-w-lg mx-auto space-y-5">
+        <div className="bg-card border border-card-border rounded-lg p-6 text-center space-y-3">
+          <p className="text-xs text-muted tracking-[0.2em] uppercase">
+            No Live Scan Result Found
+          </p>
+          <p className="text-sm text-foreground">
+            This page needs live scan data from the scanner flow.
+            {verdict ? ` Last verdict param: ${verdict}.` : ""}
+          </p>
+          <button
+            onClick={() => router.push("/scanner")}
+            className="w-full py-3 bg-accent-green text-background font-bold text-xs tracking-[0.2em] uppercase rounded-lg"
+          >
+            Return to Scanner
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return null;
+  }
+
   const isSafe = result.verdict === "safe";
+  const isWarning = result.verdict === "warning";
 
-  const scoreColor = isSafe ? "text-accent-green" : "text-accent-red";
+  const scoreColor = isSafe
+    ? "text-accent-green"
+    : isWarning
+      ? "text-accent-yellow"
+      : "text-accent-red";
   const borderColor = isSafe
     ? "border-accent-green/30"
-    : "border-accent-red/30";
+    : isWarning
+      ? "border-accent-yellow/30"
+      : "border-accent-red/30";
   const bgGlow = isSafe
     ? "from-accent-green/5"
-    : "from-accent-red/5";
+    : isWarning
+      ? "from-accent-yellow/5"
+      : "from-accent-red/5";
 
   const checkIcon = (status: string) => {
     switch (status) {
@@ -76,10 +185,20 @@ function ResultContent() {
           animate={{ opacity: 1, scale: 1 }}
           className="flex justify-center"
         >
-          <div className="px-4 py-2 bg-accent-red/10 border border-accent-red/40 rounded-full">
-            <span className="text-xs font-bold tracking-[0.2em] text-accent-red uppercase flex items-center gap-2">
+          <div
+            className={`px-4 py-2 rounded-full ${
+              isWarning
+                ? "bg-accent-yellow/10 border border-accent-yellow/40"
+                : "bg-accent-red/10 border border-accent-red/40"
+            }`}
+          >
+            <span
+              className={`text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2 ${
+                isWarning ? "text-accent-yellow" : "text-accent-red"
+              }`}
+            >
               <AlertTriangle className="w-3 h-3" />
-              Threat Detected
+              {isWarning ? "Suspicious" : "Threat Detected"}
             </span>
           </div>
         </motion.div>
@@ -109,7 +228,7 @@ function ResultContent() {
           </div>
         ) : (
           <p className="text-xs text-muted tracking-[0.2em] uppercase mt-2">
-            Critical Risk Score
+            {isWarning ? "Elevated Risk Score" : "Critical Risk Score"}
           </p>
         )}
       </motion.div>
@@ -154,7 +273,7 @@ function ResultContent() {
               <div className="px-4 pb-4 border-t border-card-border pt-3">
                 <p className="text-sm leading-relaxed">
                   {result.aiSummary}
-                  {!isSafe && (
+                  {!isSafe && !isWarning && (
                     <span className="text-accent-red font-bold">
                       {" "}
                       DO NOT PROCEED.
@@ -232,7 +351,7 @@ function ResultContent() {
       >
         {isSafe ? (
           <button
-            onClick={() => window.open(result.url, "_blank")}
+            onClick={() => window.open(buildProtectedGoUrl(result.url), "_blank")}
             className="w-full py-4 bg-accent-green text-background font-bold text-sm tracking-[0.2em] uppercase rounded-lg flex items-center justify-center gap-2 hover:bg-accent-green/90 transition-colors"
           >
             Proceed to Site

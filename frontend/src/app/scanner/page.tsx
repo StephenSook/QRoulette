@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Flashlight, History, Camera, CameraOff, ShieldAlert, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Scanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
-import { scanUrl } from "@/lib/api";
+import { getApiHealth, getDashboardRecent, scanUrl } from "@/lib/api";
 
 type ScanState = "initializing" | "scanning" | "found" | "analyzing" | "error";
 
@@ -18,6 +18,8 @@ export default function ScannerPage() {
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [locationText, setLocationText] = useState("LOC: UNAVAILABLE");
+  const [apiSignal, setApiSignal] = useState<"ONLINE" | "OFFLINE">("OFFLINE");
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -30,6 +32,23 @@ export default function ScannerPage() {
       const videoInputs = devices.filter((d) => d.kind === "videoinput");
       setHasMultipleCameras(videoInputs.length > 1);
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const hydrateTelemetry = async () => {
+      const health = await getApiHealth();
+      setApiSignal(health?.status === "ok" ? "ONLINE" : "OFFLINE");
+      navigator.geolocation?.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude.toFixed(3);
+          const lng = pos.coords.longitude.toFixed(3);
+          setLocationText(`LAT: ${lat} / LNG: ${lng}`);
+        },
+        () => setLocationText("LOC: UNAVAILABLE"),
+        { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
+      );
+    };
+    hydrateTelemetry();
   }, []);
 
   // Mark as scanning once component mounts
@@ -56,15 +75,32 @@ export default function ScannerPage() {
       setTimeout(async () => {
         setScanState("analyzing");
 
-        // Try the real backend first; fall back to mock logic
-        const apiResult = await scanUrl(url);
+        // If the payload is already a protected /go link, analyze the target URL so
+        // decisioning stays consistent with backend redirect flow.
+        let scanTarget = url;
+        let qrCodeId: string | undefined;
+        try {
+          const parsed = new URL(url);
+          if (parsed.pathname.endsWith("/go")) {
+            const nested = parsed.searchParams.get("url");
+            if (nested) {
+              scanTarget = nested;
+            }
+            qrCodeId = parsed.searchParams.get("qr_code_id") ?? undefined;
+          }
+        } catch {
+          // Keep raw payload for normalizer to handle.
+        }
 
-        let verdict: "safe" | "danger";
+        const apiResult = await scanUrl(scanTarget, qrCodeId);
+
+        let verdict: "safe" | "suspicious" | "danger";
         if (apiResult) {
-          verdict = apiResult.analysis.risk_level === "danger" ? "danger" : "safe";
+          verdict = apiResult.analysis.risk_level;
+          sessionStorage.setItem("lastScanDecision", JSON.stringify(apiResult));
         } else {
-          // Backend unreachable — use simple heuristic
-          verdict = url.includes("paypal.com") && !url.includes("paypa1") ? "safe" : "danger";
+          verdict = "danger";
+          sessionStorage.removeItem("lastScanDecision");
         }
 
         router.push(`/result?verdict=${verdict}`);
@@ -98,6 +134,15 @@ export default function ScannerPage() {
     setPaused(false);
     setDetectedUrl(null);
     setErrorMessage(null);
+  };
+
+  const handleShowHistory = async () => {
+    const recent = await getDashboardRecent(5);
+    if (!recent) {
+      showToast("History API unavailable");
+      return;
+    }
+    showToast(`Latest scans: ${recent.length}`);
   };
 
   return (
@@ -208,7 +253,7 @@ export default function ScannerPage() {
         {/* Side Controls */}
         <div className="absolute right-7 flex flex-col gap-3 z-20">
           <button
-            onClick={() => showToast("Flashlight — connecting soon")}
+            onClick={() => showToast("Use native camera torch control on device")}
             className="w-10 h-10 bg-card border border-card-border rounded-lg flex items-center justify-center hover:border-accent-green/50 transition-colors active:scale-90 active:border-accent-green/40"
             title="Toggle flashlight"
           >
@@ -224,7 +269,7 @@ export default function ScannerPage() {
             </button>
           )}
           <button
-            onClick={() => showToast("Scan history — connecting soon")}
+            onClick={handleShowHistory}
             className="w-10 h-10 bg-card border border-card-border rounded-lg flex items-center justify-center hover:border-accent-green/50 transition-colors active:scale-90 active:border-accent-green/40"
             title="Scan history"
           >
@@ -272,8 +317,7 @@ export default function ScannerPage() {
       <div className="px-5 py-3">
         <div className="flex items-center justify-between text-[10px] text-muted tracking-widest">
           <div className="space-y-0.5">
-            <p>LAT: 33.7490° N</p>
-            <p>LNG: 84.3880° W</p>
+            <p>{locationText}</p>
           </div>
           <div className="text-right space-y-0.5">
             <p>
@@ -296,7 +340,7 @@ export default function ScannerPage() {
                       : "STANDBY"}
               </span>
             </p>
-            <p>SIGNAL: 100%</p>
+            <p>SIGNAL: {apiSignal}</p>
           </div>
         </div>
       </div>

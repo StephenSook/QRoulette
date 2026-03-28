@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   QrCode,
@@ -13,6 +14,7 @@ import {
   Lock,
 } from "lucide-react";
 import Link from "next/link";
+import { getApiContract, getApiHealth } from "@/lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -75,6 +77,26 @@ const protocols = [
 ];
 
 export default function HomePage() {
+  const [apiStatus, setApiStatus] = useState<"ONLINE" | "OFFLINE">("OFFLINE");
+  const [contractVersion, setContractVersion] = useState<string>("n/a");
+  const [contractRoutes, setContractRoutes] = useState<number>(0);
+
+  useEffect(() => {
+    const hydrateBackendMeta = async () => {
+      const [health, contract] = await Promise.all([getApiHealth(), getApiContract()]);
+      if (health?.status === "ok") {
+        setApiStatus("ONLINE");
+      } else {
+        setApiStatus("OFFLINE");
+      }
+      if (contract) {
+        setContractVersion(contract.version);
+        setContractRoutes(Object.keys(contract.routes).length);
+      }
+    };
+    hydrateBackendMeta();
+  }, []);
+
   return (
     <div className="px-5 py-6 max-w-lg mx-auto space-y-8">
       {/* System Status */}
@@ -157,14 +179,18 @@ export default function HomePage() {
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="space-y-1">
             <p className="text-[10px] text-muted tracking-widest">
-              TRACE_ID: QRL_8829_VX
+              API_CONTRACT: v{contractVersion}
             </p>
             <p className="text-[10px] text-muted tracking-widest">
-              ORIGIN: CLOUD_NODE_04
+              ROUTES_EXPOSED: {contractRoutes}
             </p>
           </div>
-          <span className="text-sm font-bold text-accent-green tracking-wider">
-            SECURED
+          <span
+            className={`text-sm font-bold tracking-wider ${
+              apiStatus === "ONLINE" ? "text-accent-green" : "text-accent-red"
+            }`}
+          >
+            {apiStatus}
           </span>
         </div>
       </motion.div>
