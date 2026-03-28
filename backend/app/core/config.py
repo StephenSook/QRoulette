@@ -47,6 +47,19 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        validation_alias="GEMINI_BASE_URL",
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias="GEMINI_MODEL",
+    )
+    gemini_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        validation_alias="GEMINI_TIMEOUT_SECONDS",
+    )
     google_safe_browsing_api_key: str = Field(
         default="",
         validation_alias="GOOGLE_SAFE_BROWSING_API_KEY",
