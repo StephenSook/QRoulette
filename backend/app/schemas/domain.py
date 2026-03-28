@@ -53,6 +53,20 @@ class UrlAnalysisResult(SchemaModel):
 
     input_url: WebUrl
     normalized_url: WebUrl
+    normalized_scheme: str
+    normalized_hostname: str
+    normalized_path: str
+    registrable_domain: str
+    subdomain: str = ""
+    has_non_ascii_domain: bool = False
+    has_non_ascii_subdomain: bool = False
+    has_punycode_domain: bool = False
+    has_punycode_subdomain: bool = False
+    has_homoglyph_lookalike: bool = False
+    has_suspicious_char_substitution: bool = False
+    has_suspicious_file_extension: bool = False
+    suspicious_file_extension: str | None = None
+    reasons: list[str] = Field(default_factory=list)
     redirect_result: RedirectResult | None = None
     risk_signals: list[RiskSignal] = Field(default_factory=list)
     score_breakdown: list[ScoreBreakdownItem] = Field(default_factory=list)

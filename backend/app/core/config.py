@@ -36,6 +36,15 @@ class Settings(BaseSettings):
         ge=1.0,
         validation_alias="HTTP_TIMEOUT_SECONDS",
     )
+    safe_browsing_base_url: str = Field(
+        default="https://safebrowsing.googleapis.com",
+        validation_alias="SAFE_BROWSING_BASE_URL",
+    )
+    safe_browsing_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        validation_alias="SAFE_BROWSING_TIMEOUT_SECONDS",
+    )
 
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
     google_safe_browsing_api_key: str = Field(
