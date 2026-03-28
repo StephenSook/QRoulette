@@ -1,7 +1,10 @@
 // QRoulette Backend API client
 // Matches contract from backend/models/contracts.py
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(
+  /\/+$/,
+  ""
+);
 
 export interface RiskAnalysis {
   risk_score: number;

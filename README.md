@@ -96,3 +96,45 @@ Keep these function signatures stable so teammate internals can evolve without b
 - `GOOGLE_SAFE_API_KEY` (legacy fallback, supported)
 - `WHOIS_MOCK_AGES` (optional local/demo mapping, format: `host:days,host2:days`)
 - `WHOIS_CREATED_AT` (optional ISO timestamp fallback for local testing)
+
+## Deploy On Vercel
+
+This repo is now prepared for a two-project Vercel setup:
+
+- `frontend/` as a Next.js project
+- `backend/` as a FastAPI project
+
+### Frontend project
+
+In Vercel, create a project with:
+
+- Root Directory: `frontend`
+- Framework Preset: `Next.js`
+
+Required environment variables:
+
+- `NEXT_PUBLIC_API_URL=https://<your-backend>.vercel.app`
+
+### Backend project
+
+In Vercel, create a second project with:
+
+- Root Directory: `backend`
+- Framework Preset: `Other`
+
+The backend now includes `backend/pyproject.toml`, which declares runtime dependencies and exposes the FastAPI app entrypoint as `main:app` for Vercel.
+
+Recommended environment variables:
+
+- `CORS_ORIGINS=https://<your-frontend>.vercel.app`
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `GOOGLE_SAFE_BROWSING_API_KEY`
+- Any other provider keys used by your deployment
+
+### Notes
+
+- Root Directory is a Vercel project setting, so it cannot be fully committed in the repo.
+- The frontend defaults to `http://localhost:8000` for local development and should use `NEXT_PUBLIC_API_URL` in Vercel.
+- If you want preview frontend deployments to call the backend, add the relevant preview domain(s) to `CORS_ORIGINS` or use a shared custom domain strategy.
