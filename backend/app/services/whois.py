@@ -57,6 +57,8 @@ def _parse_datetime(value: Any) -> datetime | None:
     candidates = [normalized]
     if normalized.endswith("Z"):
         candidates.append(normalized[:-1] + "+00:00")
+    if normalized.endswith(" UTC"):
+        candidates.append(normalized[:-4].replace(" ", "T") + "+00:00")
 
     for candidate in candidates:
         try:

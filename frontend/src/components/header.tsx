@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Shield, User, Scan, Settings, LogOut, ChevronRight } from "lucide-react";
 import Link from "next/link";
-import { getApiContract, getDashboardRecent } from "@/lib/api";
 
 // Fixed initial pattern to avoid hydration mismatch (no Math.random on first render)
 const INITIAL_PATTERN: boolean[][] = [
@@ -88,8 +87,6 @@ function ProfileButton() {
   const [isHovered, setIsHovered] = useState(false);
   const [glowHue, setGlowHue] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
-  const [historyCount, setHistoryCount] = useState<string>("--");
-  const [routeCount, setRouteCount] = useState<string>("--");
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number>(0);
 
@@ -97,19 +94,6 @@ function ProfileButton() {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
   };
-
-  useEffect(() => {
-    const hydrateMenuData = async () => {
-      const [recent, contract] = await Promise.all([getDashboardRecent(100), getApiContract()]);
-      if (recent) {
-        setHistoryCount(String(recent.length));
-      }
-      if (contract) {
-        setRouteCount(String(Object.keys(contract.routes).length));
-      }
-    };
-    hydrateMenuData();
-  }, []);
 
   // Rotating hue for the glow
   useEffect(() => {
@@ -208,9 +192,9 @@ function ProfileButton() {
           {/* Menu items */}
           <div className="py-1">
             {[
-              { icon: Scan, label: "SCAN HISTORY", count: historyCount, toast: `Recent scans loaded: ${historyCount}` },
-              { icon: Settings, label: "PROTOCOLS", count: routeCount, toast: `API routes online: ${routeCount}` },
-              { icon: LogOut, label: "DISCONNECT", count: null, toast: "Session controls are local-only in this demo" },
+              { icon: Scan, label: "SCAN HISTORY", count: "142", toast: "Scan history — connecting to database" },
+              { icon: Settings, label: "PROTOCOLS", count: null, toast: "Protocols — connecting soon" },
+              { icon: LogOut, label: "DISCONNECT", count: null, toast: "Session management — connecting soon" },
             ].map((item) => (
               <button
                 key={item.label}

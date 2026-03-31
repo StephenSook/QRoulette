@@ -60,11 +60,12 @@ def _normalize_verdict(value: Any, score: float | None) -> Verdict:
 
     if score is None:
         return Verdict.UNKNOWN
-    if score >= 75:
-        return Verdict.MALICIOUS
-    if score >= 40:
+    # WhoisXML reputationScore: 100 = safe, 0 = risky.
+    if score >= 60:
+        return Verdict.SAFE
+    if score >= 30:
         return Verdict.SUSPICIOUS
-    return Verdict.SAFE
+    return Verdict.MALICIOUS
 
 
 class ReputationService(ServiceStub):
@@ -104,18 +105,23 @@ class ReputationService(ServiceStub):
             self.logger.warning("Reputation lookup skipped because REPUTATION_BASE_URL is missing.")
             return self._fallback(url, "Reputation provider is not configured.")
 
-        headers: dict[str, str] = {}
-        if self.context.settings.reputation_api_key:
-            # TODO: Update auth/header shape when the concrete reputation vendor is chosen.
-            headers["Authorization"] = (
-                f"Bearer {self.context.settings.reputation_api_key}"
-            )
+        api_key = self.context.settings.reputation_api_key
+        if not api_key:
+            self.logger.warning("Reputation lookup skipped because REPUTATION_API_KEY is missing.")
+            return self._fallback(url, "Reputation API key is not configured.")
+
+        # WhoisXML Domain Reputation API expects a domain, not a full URL.
+        from urllib.parse import urlsplit as _urlsplit
+        domain = _urlsplit(url).hostname or url
 
         try:
             response = await self.context.client.get(
                 base_url,
-                params={"url": url},
-                headers=headers or None,
+                params={
+                    "apiKey": api_key,
+                    "domainName": domain,
+                    "outputFormat": "JSON",
+                },
                 timeout=self.context.settings.reputation_timeout_seconds,
             )
             response.raise_for_status()
@@ -145,10 +151,10 @@ class ReputationService(ServiceStub):
 
         raw_response = payload if isinstance(payload, dict) else {"response": payload}
 
-        # TODO: Narrow these fields to the real provider contract once selected.
+        # WhoisXML Domain Reputation returns {reputationScore, testResults: [{test, warnings}]}
         score = _normalize_score(
-            raw_response.get("score")
-            or raw_response.get("reputationScore")
+            raw_response.get("reputationScore")
+            or raw_response.get("score")
             or raw_response.get("risk_score")
         )
         confidence_value = raw_response.get("confidence")
@@ -158,11 +164,23 @@ class ReputationService(ServiceStub):
             else None
         )
         categories = _as_list(raw_response.get("categories") or raw_response.get("tags"))
-        reasons = _as_list(
-            raw_response.get("reasons")
-            or raw_response.get("details")
-            or raw_response.get("signals")
-        )
+
+        # Extract warning descriptions from WhoisXML testResults
+        reasons: list[str] = []
+        test_results = raw_response.get("testResults")
+        if isinstance(test_results, list):
+            for test in test_results:
+                if isinstance(test, dict):
+                    for warning in (test.get("warnings") or []):
+                        desc = warning.get("warningDescription") if isinstance(warning, dict) else None
+                        if desc:
+                            reasons.append(desc)
+        if not reasons:
+            reasons = _as_list(
+                raw_response.get("reasons")
+                or raw_response.get("details")
+                or raw_response.get("signals")
+            )
         verdict = _normalize_verdict(
             raw_response.get("verdict") or raw_response.get("classification"),
             score,

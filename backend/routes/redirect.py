@@ -1,5 +1,4 @@
 from typing import Any
-import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -16,8 +15,7 @@ router = APIRouter(prefix="", tags=["redirect"])
 async def protected_redirect(request: Request, url: str, qr_code_id: str | None = None) -> Any:
     query = ScanRequest(url=url, qr_code_id=qr_code_id)
     normalized_url = normalize_url(query.url)
-    outcome = analyze_url(normalized_url, include_destination=True)
-    analysis = outcome.analysis
+    analysis = analyze_url(normalized_url)
 
     # Always log before allowing/blocking so dashboard captures every scan attempt.
     scan_row = {
@@ -39,25 +37,17 @@ async def protected_redirect(request: Request, url: str, qr_code_id: str | None 
     log_scan(scan_row)
 
     decision = ScanDecisionResponse(
-        allowed=analysis.risk_level == "safe"
-        or (
-            analysis.risk_level == "suspicious"
-            and os.getenv("ALLOW_SUSPICIOUS_REDIRECTS", "false").strip().lower() == "true"
-        ),
+        allowed=analysis.risk_level != "danger",
         reason=(
             "Blocked by risk policy."
             if analysis.risk_level == "danger"
-            or (
-                analysis.risk_level == "suspicious"
-                and os.getenv("ALLOW_SUSPICIOUS_REDIRECTS", "false").strip().lower() != "true"
-            )
             else "Allowed by risk policy."
         ),
         analysis=analysis,
-        destination=outcome.destination_url,
+        destination=normalized_url,
     )
 
-    if not decision.allowed:
+    if analysis.risk_level == "danger":
         # Return structured block payload that UI can render directly.
         return JSONResponse(
             status_code=403,
@@ -65,4 +55,4 @@ async def protected_redirect(request: Request, url: str, qr_code_id: str | None 
         )
 
     # Safe URLs continue through normal browsing flow.
-    return RedirectResponse(url=outcome.destination_url, status_code=307)
+    return RedirectResponse(url=normalized_url, status_code=307)

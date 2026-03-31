@@ -30,7 +30,7 @@ Open docs at `http://127.0.0.1:8000/docs`.
     - `qr_code_id` (string, optional)
   - Response:
     - `allowed` (boolean)
-    - `destination` (string, resolved final URL after redirects)
+    - `destination` (string)
     - `reason` (string)
     - `analysis` object:
       - `risk_score` (0-100)
@@ -39,13 +39,13 @@ Open docs at `http://127.0.0.1:8000/docs`.
       - `flagged_threat_intel` (boolean)
       - `typosquatting_detected` (boolean)
       - `domain_age_days` (integer or null)
-      - `redirect_hops` (integer, based on the observed redirect chain)
+      - `redirect_hops` (integer)
       - `ssl_valid` (boolean)
       - `ai_summary` (string)
 
 - `GET /go?url=...&qr_code_id=...`
   - Logs scan attempt to Supabase.
-  - If safe: returns `307` redirect to the resolved final destination.
+  - If safe: returns `307` redirect to destination.
   - If danger: returns `403` with same decision payload shape as `POST /scan`.
 
 - `GET /dashboard/summary`
@@ -96,45 +96,3 @@ Keep these function signatures stable so teammate internals can evolve without b
 - `GOOGLE_SAFE_API_KEY` (legacy fallback, supported)
 - `WHOIS_MOCK_AGES` (optional local/demo mapping, format: `host:days,host2:days`)
 - `WHOIS_CREATED_AT` (optional ISO timestamp fallback for local testing)
-
-## Deploy On Vercel
-
-This repo is now prepared for a two-project Vercel setup:
-
-- `frontend/` as a Next.js project
-- `backend/` as a FastAPI project
-
-### Frontend project
-
-In Vercel, create a project with:
-
-- Root Directory: `frontend`
-- Framework Preset: `Next.js`
-
-Required environment variables:
-
-- `NEXT_PUBLIC_API_URL=https://<your-backend>.vercel.app`
-
-### Backend project
-
-In Vercel, create a second project with:
-
-- Root Directory: `backend`
-- Framework Preset: `Other`
-
-The backend now includes `backend/pyproject.toml`, which declares runtime dependencies and exposes the FastAPI app entrypoint as `main:app` for Vercel.
-
-Recommended environment variables:
-
-- `CORS_ORIGINS=https://<your-frontend>.vercel.app`
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `GOOGLE_SAFE_BROWSING_API_KEY`
-- Any other provider keys used by your deployment
-
-### Notes
-
-- Root Directory is a Vercel project setting, so it cannot be fully committed in the repo.
-- The frontend defaults to `http://localhost:8000` for local development and should use `NEXT_PUBLIC_API_URL` in Vercel.
-- If you want preview frontend deployments to call the backend, add the relevant preview domain(s) to `CORS_ORIGINS` or use a shared custom domain strategy.

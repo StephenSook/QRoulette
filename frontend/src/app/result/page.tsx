@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck,
@@ -14,125 +14,135 @@ import {
   X,
   CheckCircle2,
   Type,
+  Link2,
+  Globe,
 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { buildProtectedGoUrl, type ScanDecisionResponse } from "@/lib/api";
-import type { ScanResult } from "@/lib/types";
+import { mockSafeResult, mockDangerResult } from "@/lib/mock-data";
+import type { ScanAnalyzeResponse } from "@/lib/api";
+import type { ScanResult, SecurityCheck } from "@/lib/types";
+
+/**
+ * Convert the real backend API response into the ScanResult shape
+ * used by the result UI.
+ */
+function apiResponseToScanResult(api: ScanAnalyzeResponse): ScanResult {
+  const risk = api.risk;
+  const verdict: "safe" | "warning" | "danger" =
+    risk.verdict === "dangerous" ? "danger" : risk.verdict === "suspicious" ? "warning" : "safe";
+
+  const checks: SecurityCheck[] = [];
+
+  // Domain age check
+  if (risk.domain_age_days !== null) {
+    const years = Math.floor(risk.domain_age_days / 365);
+    const ageLabel = years >= 1 ? `${years} Year${years > 1 ? "s" : ""}` : `${risk.domain_age_days} Days`;
+    checks.push({
+      name: "domain_age",
+      label: "DOMAIN AGE",
+      value: ageLabel,
+      status: risk.domain_age_days < 90 ? "fail" : risk.domain_age_days < 365 ? "warn" : "pass",
+      icon: "clock",
+    });
+  }
+
+  // SSL certificate check
+  checks.push({
+    name: "ssl_cert",
+    label: "SSL CERTIFICATE",
+    value: risk.ssl_valid ? "Valid" : "INVALID",
+    status: risk.ssl_valid ? "pass" : "fail",
+    icon: risk.ssl_valid ? "shield-check" : "shield-alert",
+  });
+
+  // Typosquatting check
+  checks.push({
+    name: "typosquatting",
+    label: "TYPOSQUATTING",
+    value: risk.typosquatting_detected ? "DETECTED" : "Not Detected",
+    status: risk.typosquatting_detected ? "fail" : "pass",
+    icon: "type",
+  });
+
+  // Safe Browsing / phishing DB check
+  if (risk.flagged_safe_browsing) {
+    checks.push({
+      name: "phishing_db",
+      label: "KNOWN PHISHING DATABASE",
+      value: "MATCH",
+      status: "fail",
+      icon: "database",
+    });
+  }
+
+  // Threat intel check
+  if (risk.flagged_threat_intel) {
+    checks.push({
+      name: "threat_intel",
+      label: "THREAT INTELLIGENCE",
+      value: "FLAGGED",
+      status: "fail",
+      icon: "database",
+    });
+  }
+
+  // Redirect hops check
+  if (risk.redirect_hops > 0) {
+    checks.push({
+      name: "redirects",
+      label: "REDIRECT CHAIN",
+      value: `${risk.redirect_hops} Hop${risk.redirect_hops > 1 ? "s" : ""}`,
+      status: risk.redirect_hops >= 3 ? "warn" : "pass",
+      icon: "link",
+    });
+  }
+
+  return {
+    id: api.scan_id,
+    url: api.analysis.normalized_url,
+    riskScore: risk.score,
+    verdict,
+    checks,
+    aiSummary: api.explanation || risk.summary,
+    scannedAt: new Date().toISOString(),
+  };
+}
 
 function ResultContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const verdict = searchParams.get("verdict");
+  const verdictParam = searchParams.get("verdict") || "safe";
   const [showAiSummary, setShowAiSummary] = useState(false);
-  const [apiResult, setApiResult] = useState<ScanDecisionResponse | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+  const [result, setResult] = useState<ScanResult | null>(null);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem("lastScanDecision");
-    if (!raw) {
-      setApiResult(null);
-      setHydrated(true);
-      return;
+    const stored = sessionStorage.getItem("qr_scan_result");
+    if (stored) {
+      try {
+        const apiResponse: ScanAnalyzeResponse = JSON.parse(stored);
+        setResult(apiResponseToScanResult(apiResponse));
+      } catch {
+        // Corrupt storage — fall back to mock
+        setResult(verdictParam === "safe" ? mockSafeResult : mockDangerResult);
+      }
+    } else {
+      // No real data — use mock
+      setResult(verdictParam === "safe" ? mockSafeResult : mockDangerResult);
     }
-    try {
-      setApiResult(JSON.parse(raw) as ScanDecisionResponse);
-    } catch {
-      setApiResult(null);
-    }
-    setHydrated(true);
-  }, []);
-
-  const result: ScanResult | null = useMemo(() => {
-    if (!apiResult) return null;
-
-    const analysis = apiResult.analysis;
-    const mappedVerdict =
-      analysis.risk_level === "danger"
-        ? "danger"
-        : analysis.risk_level === "suspicious"
-          ? "warning"
-          : "safe";
-
-    return {
-      id: `scan-${Date.now()}`,
-      url: apiResult.destination,
-      riskScore: analysis.risk_score,
-      verdict: mappedVerdict,
-      checks: [
-        {
-          name: "domain_age",
-          label: "DOMAIN AGE",
-          value:
-            analysis.domain_age_days === null
-              ? "Unknown"
-              : `${analysis.domain_age_days} Days`,
-          status:
-            analysis.domain_age_days !== null && analysis.domain_age_days <= 30
-              ? "warn"
-              : "pass",
-          icon: "clock",
-        },
-        {
-          name: "ssl_cert",
-          label: "SSL CERTIFICATE",
-          value: analysis.ssl_valid ? "Valid (HTTPS)" : "Missing/Invalid",
-          status: analysis.ssl_valid ? "pass" : "fail",
-          icon: "shield-check",
-        },
-        {
-          name: "typosquatting",
-          label: "TYPOSQUATTING",
-          value: analysis.typosquatting_detected ? "Detected" : "Not Detected",
-          status: analysis.typosquatting_detected ? "fail" : "pass",
-          icon: "type",
-        },
-        {
-          name: "phishing_db",
-          label: "SAFE BROWSING",
-          value: analysis.flagged_safe_browsing ? "MATCH" : "CLEAR",
-          status: analysis.flagged_safe_browsing ? "fail" : "pass",
-          icon: "database",
-        },
-      ],
-      aiSummary: analysis.ai_summary,
-      scannedAt: new Date().toISOString(),
-    };
-  }, [apiResult]);
-
-  if (hydrated && !result) {
-    return (
-      <div className="px-5 py-10 max-w-lg mx-auto space-y-5">
-        <div className="bg-card border border-card-border rounded-lg p-6 text-center space-y-3">
-          <p className="text-xs text-muted tracking-[0.2em] uppercase">
-            No Live Scan Result Found
-          </p>
-          <p className="text-sm text-foreground">
-            This page needs live scan data from the scanner flow.
-            {verdict ? ` Last verdict param: ${verdict}.` : ""}
-          </p>
-          <button
-            onClick={() => router.push("/scanner")}
-            className="w-full py-3 bg-accent-green text-background font-bold text-xs tracking-[0.2em] uppercase rounded-lg"
-          >
-            Return to Scanner
-          </button>
-        </div>
-      </div>
-    );
-  }
+  }, [verdictParam]);
 
   if (!result) {
-    return null;
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-8 h-8 border-2 border-accent-green border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
   }
 
   const isSafe = result.verdict === "safe";
   const isWarning = result.verdict === "warning";
 
-  const scoreColor = isSafe
-    ? "text-accent-green"
-    : isWarning
-      ? "text-accent-yellow"
-      : "text-accent-red";
+  const scoreColor = isSafe ? "text-accent-green" : isWarning ? "text-accent-yellow" : "text-accent-red";
   const borderColor = isSafe
     ? "border-accent-green/30"
     : isWarning
@@ -170,11 +180,20 @@ function ResultContent() {
       case "typosquatting":
         return <Type className="w-5 h-5 text-muted" />;
       case "phishing_db":
+      case "threat_intel":
         return <Database className="w-5 h-5 text-muted" />;
+      case "redirects":
+        return <Link2 className="w-5 h-5 text-muted" />;
       default:
-        return null;
+        return <Globe className="w-5 h-5 text-muted" />;
     }
   };
+
+  const verdictLabel = isSafe
+    ? "Verified Safe"
+    : isWarning
+      ? "Suspicious"
+      : "Threat Detected";
 
   return (
     <div className="px-5 py-6 max-w-lg mx-auto space-y-6">
@@ -186,11 +205,11 @@ function ResultContent() {
           className="flex justify-center"
         >
           <div
-            className={`px-4 py-2 rounded-full ${
+            className={`px-4 py-2 ${
               isWarning
-                ? "bg-accent-yellow/10 border border-accent-yellow/40"
-                : "bg-accent-red/10 border border-accent-red/40"
-            }`}
+                ? "bg-accent-yellow/10 border-accent-yellow/40"
+                : "bg-accent-red/10 border-accent-red/40"
+            } border rounded-full`}
           >
             <span
               className={`text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-2 ${
@@ -198,7 +217,7 @@ function ResultContent() {
               }`}
             >
               <AlertTriangle className="w-3 h-3" />
-              {isWarning ? "Suspicious" : "Threat Detected"}
+              {verdictLabel}
             </span>
           </div>
         </motion.div>
@@ -227,13 +246,19 @@ function ResultContent() {
             </span>
           </div>
         ) : (
-          <p className="text-xs text-muted tracking-[0.2em] uppercase mt-2">
-            {isWarning ? "Elevated Risk Score" : "Critical Risk Score"}
+          <p className={`text-xs tracking-[0.2em] uppercase mt-2 ${isWarning ? "text-accent-yellow" : "text-muted"}`}>
+            {isWarning ? "Caution Advised" : "Critical Risk Score"}
           </p>
         )}
       </motion.div>
 
-      {/* AI Summary - Expandable (Justin's pattern) */}
+      {/* Scanned URL */}
+      <div className="bg-card border border-card-border rounded-lg px-4 py-2.5">
+        <p className="text-[10px] text-muted tracking-widest uppercase mb-1">TARGET URL</p>
+        <p className="text-xs font-mono text-foreground truncate">{result.url}</p>
+      </div>
+
+      {/* AI Summary - Expandable */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -248,7 +273,7 @@ function ResultContent() {
             {isSafe ? (
               <ShieldCheck className="w-4 h-4 text-accent-green" />
             ) : (
-              <ShieldAlert className="w-4 h-4 text-accent-red" />
+              <ShieldAlert className={`w-4 h-4 ${isWarning ? "text-accent-yellow" : "text-accent-red"}`} />
             )}
             <span className="text-xs tracking-[0.2em] uppercase">
               {isSafe ? "AI Intelligence Summary" : "AI Threat Analysis"}
@@ -351,7 +376,7 @@ function ResultContent() {
       >
         {isSafe ? (
           <button
-            onClick={() => window.open(buildProtectedGoUrl(result.url), "_blank")}
+            onClick={() => window.open(result.url, "_blank")}
             className="w-full py-4 bg-accent-green text-background font-bold text-sm tracking-[0.2em] uppercase rounded-lg flex items-center justify-center gap-2 hover:bg-accent-green/90 transition-colors"
           >
             Proceed to Site
@@ -359,9 +384,11 @@ function ResultContent() {
           </button>
         ) : (
           <div className="space-y-3">
-            <div className="py-3 border border-accent-red/30 rounded-lg text-center">
-              <p className="text-[10px] text-accent-red tracking-[0.2em] uppercase font-semibold">
-                Navigation Restricted by Security Policy
+            <div className={`py-3 border ${isWarning ? "border-accent-yellow/30" : "border-accent-red/30"} rounded-lg text-center`}>
+              <p className={`text-[10px] tracking-[0.2em] uppercase font-semibold ${isWarning ? "text-accent-yellow" : "text-accent-red"}`}>
+                {isWarning
+                  ? "Proceed with Caution — Suspicious Signals Detected"
+                  : "Navigation Restricted by Security Policy"}
               </p>
             </div>
             <button

@@ -2,14 +2,6 @@ from urllib.parse import urlparse
 
 BRAND_KEYWORDS = (
     "paypal",
-    "youtube",
-    "google",
-    "amazon",
-    "apple",
-    "microsoft",
-    "facebook",
-    "instagram",
-    "netflix",
     "chase",
     "bankofamerica",
     "venmo",

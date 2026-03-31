@@ -78,16 +78,19 @@ class SSLInfoService(ServiceStub):
             self.logger.warning("SSL inspection skipped because SSL_INFO_BASE_URL is missing.")
             return self._fallback(host, "SSL-info provider is not configured.")
 
-        headers: dict[str, str] = {}
-        if self.context.settings.ssl_info_api_key:
-            # TODO: Update auth/header handling when the SSL vendor contract is finalized.
-            headers["Authorization"] = f"Bearer {self.context.settings.ssl_info_api_key}"
+        api_key = self.context.settings.ssl_info_api_key
+        if not api_key:
+            self.logger.warning("SSL inspection skipped because SSL_INFO_API_KEY is missing.")
+            return self._fallback(host, "SSL-info API key is not configured.")
 
         try:
             response = await self.context.client.get(
                 base_url,
-                params={"host": host},
-                headers=headers or None,
+                params={
+                    "apiKey": api_key,
+                    "domainName": host,
+                    "outputFormat": "JSON",
+                },
                 timeout=self.context.settings.ssl_info_timeout_seconds,
             )
             response.raise_for_status()

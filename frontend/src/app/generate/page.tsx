@@ -14,13 +14,120 @@ import {
   CheckCircle,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { buildProtectedGoUrl, scanUrl, type ScanDecisionResponse } from "@/lib/api";
+import { scanUrl, type ScanAnalyzeResponse } from "@/lib/api";
 
 interface UrlCheckResult {
   score: number;
   verdict: "safe" | "warning" | "danger";
   flags: { label: string; severity: "low" | "medium" | "high"; detail: string }[];
-  reason: string;
+}
+
+// Client-side heuristic URL threat analysis (mocked for now — backend will replace)
+function analyzeUrl(rawUrl: string): UrlCheckResult {
+  const flags: UrlCheckResult["flags"] = [];
+  let score = 0;
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`);
+  } catch {
+    return {
+      score: 80,
+      verdict: "danger",
+      flags: [{ label: "INVALID URL", severity: "high", detail: "Could not parse URL structure." }],
+    };
+  }
+
+  const hostname = url.hostname.toLowerCase();
+
+  // IP address instead of domain
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[")) {
+    flags.push({ label: "IP ADDRESS", severity: "high", detail: "Uses raw IP instead of domain name." });
+    score += 30;
+  }
+
+  // Suspicious TLDs
+  const suspiciousTlds = [".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".buzz", ".club", ".work", ".click", ".link", ".info"];
+  if (suspiciousTlds.some((tld) => hostname.endsWith(tld))) {
+    flags.push({ label: "SUSPICIOUS TLD", severity: "medium", detail: `Domain uses a high-risk top-level domain.` });
+    score += 20;
+  }
+
+  // Typosquatting patterns — common brand lookalikes
+  const brands = ["paypal", "google", "amazon", "apple", "microsoft", "facebook", "instagram", "netflix", "chase", "wellsfargo", "bankofamerica", "venmo", "cashapp", "zelle"];
+  for (const brand of brands) {
+    // l33tspeak or character substitution (e.g., paypa1, g00gle, amaz0n)
+    const leetPattern = brand.replace(/a/g, "[a@4]").replace(/e/g, "[e3]").replace(/i/g, "[i1!]").replace(/o/g, "[o0]").replace(/l/g, "[l1]").replace(/s/g, "[s5$]");
+    const regex = new RegExp(leetPattern, "i");
+    if (regex.test(hostname) && !hostname.includes(brand)) {
+      flags.push({ label: "TYPOSQUATTING", severity: "high", detail: `Resembles "${brand}" but uses character substitution.` });
+      score += 35;
+      break;
+    }
+    // Brand in subdomain with different registrable domain
+    if (hostname.includes(brand) && !hostname.endsWith(`${brand}.com`) && !hostname.endsWith(`${brand}.io`) && !hostname.endsWith(`${brand}.org`)) {
+      const parts = hostname.split(".");
+      const registrable = parts.slice(-2).join(".");
+      if (!registrable.startsWith(brand)) {
+        flags.push({ label: "BRAND IMPERSONATION", severity: "high", detail: `Contains "${brand}" in subdomain but resolves to a different domain.` });
+        score += 30;
+        break;
+      }
+    }
+  }
+
+  // Excessive subdomains
+  const subdomainCount = hostname.split(".").length - 2;
+  if (subdomainCount >= 3) {
+    flags.push({ label: "EXCESSIVE SUBDOMAINS", severity: "medium", detail: `${subdomainCount + 1} subdomain levels detected — commonly used to obscure the real domain.` });
+    score += 15;
+  }
+
+  // Suspicious path patterns
+  const path = url.pathname + url.search;
+  if (/\.(exe|apk|msi|bat|cmd|scr|js|vbs|ps1)(\?|$)/i.test(path)) {
+    flags.push({ label: "EXECUTABLE FILE", severity: "high", detail: "URL points to a potentially executable file." });
+    score += 25;
+  }
+
+  // URL shortener detection
+  const shorteners = ["bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd", "buff.ly", "cutt.ly", "rb.gy", "short.io"];
+  if (shorteners.some((s) => hostname === s || hostname.endsWith(`.${s}`))) {
+    flags.push({ label: "URL SHORTENER", severity: "medium", detail: "Shortened URLs can hide the true destination." });
+    score += 15;
+  }
+
+  // HTTP (not HTTPS)
+  if (url.protocol === "http:") {
+    flags.push({ label: "NO ENCRYPTION", severity: "low", detail: "Uses HTTP instead of HTTPS — data is not encrypted." });
+    score += 10;
+  }
+
+  // Very long URL
+  if (rawUrl.length > 200) {
+    flags.push({ label: "LONG URL", severity: "low", detail: "Unusually long URL — can be used to hide malicious parameters." });
+    score += 5;
+  }
+
+  // Data URI / JavaScript
+  if (rawUrl.startsWith("data:") || rawUrl.startsWith("javascript:")) {
+    flags.push({ label: "DANGEROUS SCHEME", severity: "high", detail: "Uses a non-standard scheme that can execute code." });
+    score += 50;
+  }
+
+  // @ symbol in URL (credential smuggling)
+  if (url.username || rawUrl.includes("@") && !rawUrl.includes("mailto:")) {
+    flags.push({ label: "CREDENTIAL SMUGGLING", severity: "high", detail: "URL contains @ symbol — can trick browsers into showing a fake domain." });
+    score += 30;
+  }
+
+  score = Math.min(score, 100);
+
+  let verdict: UrlCheckResult["verdict"] = "safe";
+  if (score >= 50) verdict = "danger";
+  else if (score >= 20) verdict = "warning";
+
+  return { score, verdict, flags };
 }
 
 export default function GeneratePage() {
@@ -30,7 +137,6 @@ export default function GeneratePage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
-  const [apiError, setApiError] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [overrideWarning, setOverrideWarning] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -46,7 +152,7 @@ export default function GeneratePage() {
   const doGenerate = async () => {
     setIsGenerating(true);
     const slug = generateSlug();
-    const protectedUrl = buildProtectedGoUrl(url.trim(), slug);
+    const protectedUrl = `qroulette.io/p/${slug}`;
     setProtectedSlug(protectedUrl);
 
     try {
@@ -67,23 +173,23 @@ export default function GeneratePage() {
   const handleGenerate = async () => {
     if (!url.trim()) return;
 
-    // Analyze via backend contract first.
+    // Run URL analysis first
     setIsChecking(true);
     setCheckResult(null);
-    setApiError(null);
     setOverrideWarning(false);
     setQrDataUrl(null);
     setProtectedSlug(null);
 
     const trimmedUrl = url.trim();
-    const apiResult = await scanUrl(trimmedUrl);
-    if (!apiResult) {
-      setApiError("Backend scan API unavailable. Please verify API is running.");
-      setIsChecking(false);
-      return;
-    }
 
-    const merged = mapFromApi(apiResult);
+    // Run client-side heuristics + backend API in parallel
+    const [clientResult, apiResult] = await Promise.all([
+      Promise.resolve(analyzeUrl(trimmedUrl)),
+      scanUrl(trimmedUrl),
+    ]);
+
+    // Merge backend flags into client result
+    const merged = mergeAnalysis(clientResult, apiResult);
     setCheckResult(merged);
     setIsChecking(false);
 
@@ -94,65 +200,67 @@ export default function GeneratePage() {
     // If warning/danger, show the result and let user decide
   };
 
-  function mapFromApi(api: ScanDecisionResponse): UrlCheckResult {
-    const flags: UrlCheckResult["flags"] = [];
-    const a = api.analysis;
-    if (a.flagged_safe_browsing) {
+  /** Merge backend scan result into our client-side UrlCheckResult */
+  function mergeAnalysis(
+    client: UrlCheckResult,
+    api: ScanAnalyzeResponse | null
+  ): UrlCheckResult {
+    if (!api) return client; // backend unreachable — use client-only
+
+    const flags = [...client.flags];
+    const r = api.risk;
+
+    if (r.flagged_safe_browsing) {
       flags.push({
         label: "SAFE BROWSING HIT",
         severity: "high",
         detail: "Google Safe Browsing flagged this URL as a known threat.",
       });
     }
-    if (a.flagged_threat_intel || (a.domain_age_days !== null && a.domain_age_days < 30)) {
+    if (r.flagged_threat_intel) {
       flags.push({
-        label: "THREAT INTEL SIGNAL",
+        label: "THREAT INTEL MATCH",
         severity: "high",
-        detail: "Threat intelligence heuristics flagged this domain as risky.",
+        detail: "URL matched entries in threat intelligence databases.",
       });
     }
-    if (a.typosquatting_detected) {
+    if (r.typosquatting_detected && !flags.some((f) => f.label === "TYPOSQUATTING")) {
       flags.push({
         label: "TYPOSQUATTING",
         severity: "high",
         detail: "Backend analysis detected domain typosquatting patterns.",
       });
     }
-    if (a.domain_age_days !== null && a.domain_age_days < 30) {
+    if (r.domain_age_days !== null && r.domain_age_days < 30) {
       flags.push({
         label: "NEW DOMAIN",
         severity: "medium",
-        detail: `Domain registered ${a.domain_age_days} day${a.domain_age_days !== 1 ? "s" : ""} ago — newly created domains are high-risk.`,
+        detail: `Domain registered ${r.domain_age_days} day${r.domain_age_days !== 1 ? "s" : ""} ago — newly created domains are high-risk.`,
       });
     }
-    if (a.redirect_hops > 2) {
+    if (r.redirect_hops > 2) {
       flags.push({
         label: "REDIRECT CHAIN",
         severity: "medium",
-        detail: `URL follows ${a.redirect_hops} redirects — long chains can obscure the final destination.`,
+        detail: `URL follows ${r.redirect_hops} redirects — long chains can obscure the final destination.`,
       });
     }
-    if (!a.ssl_valid && !flags.some((f) => f.label === "NO ENCRYPTION")) {
+    if (!r.ssl_valid && !flags.some((f) => f.label === "NO ENCRYPTION")) {
       flags.push({
-        label: "NO ENCRYPTION",
-        severity: "low",
-        detail: "Destination does not use HTTPS.",
-      });
-    }
-    if (flags.length === 0) {
-      flags.push({
-        label: "NO CRITICAL FLAGS",
-        severity: "low",
-        detail: "No high-risk signals were returned by backend analysis.",
+        label: "INVALID SSL",
+        severity: "medium",
+        detail: "SSL certificate is missing or invalid.",
       });
     }
 
-    return {
-      score: a.risk_score,
-      verdict: a.risk_level === "danger" ? "danger" : a.risk_level === "suspicious" ? "warning" : "safe",
-      flags,
-      reason: api.reason,
-    };
+    // Take the higher score between client and backend
+    const score = Math.min(Math.max(client.score, r.score), 100);
+
+    let verdict: UrlCheckResult["verdict"] = "safe";
+    if (score >= 50 || r.verdict === "dangerous") verdict = "danger";
+    else if (score >= 20 || r.verdict === "suspicious") verdict = "warning";
+
+    return { score, verdict, flags };
   }
 
   const handleOverrideAndGenerate = async () => {
@@ -175,7 +283,7 @@ export default function GeneratePage() {
 
   const handleCopyLink = async () => {
     if (!protectedSlug) return;
-    await navigator.clipboard.writeText(protectedSlug);
+    await navigator.clipboard.writeText(`https://${protectedSlug}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -191,6 +299,13 @@ export default function GeneratePage() {
     link.click();
     URL.revokeObjectURL(svgUrl);
   };
+
+  const verdictColor =
+    checkResult?.verdict === "danger"
+      ? "accent-red"
+      : checkResult?.verdict === "warning"
+        ? "accent-yellow"
+        : "accent-green";
 
   return (
     <div className="px-5 py-6 max-w-lg mx-auto space-y-6">
@@ -222,7 +337,6 @@ export default function GeneratePage() {
               setQrDataUrl(null);
               setProtectedSlug(null);
               setOverrideWarning(false);
-              setApiError(null);
             }
           }}
           placeholder="https://your-business-link"
@@ -242,12 +356,6 @@ export default function GeneratePage() {
               : "GENERATE PROTECTED QR CODE"}
         </button>
       </div>
-
-      {apiError && (
-        <div className="bg-card border border-accent-red/40 rounded-lg p-4">
-          <p className="text-xs text-accent-red tracking-wider uppercase">{apiError}</p>
-        </div>
-      )}
 
       {/* URL Analysis Progress */}
       <AnimatePresence>
@@ -311,9 +419,6 @@ export default function GeneratePage() {
                     {checkResult.verdict === "danger"
                       ? "This URL exhibits characteristics commonly associated with phishing or malicious activity."
                       : "This URL has some characteristics that may warrant additional review."}
-                  </p>
-                  <p className="text-[10px] text-muted tracking-widest mt-1">
-                    POLICY_DECISION: {checkResult.reason}
                   </p>
                 </div>
               </div>

@@ -1,141 +1,95 @@
 // QRoulette Backend API client
-// Matches contract from backend/models/contracts.py
+// Matches the FastAPI backend at /api/scan/analyze
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(
-  /\/+$/,
-  ""
-);
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export interface RiskAnalysis {
-  risk_score: number;
-  risk_level: "safe" | "suspicious" | "danger";
+// --- Backend response types (mirrors Python schemas) ---
+
+export interface ScoreBreakdownItem {
+  source_type: string;
+  label: string;
+  score: number;
+  weight: number;
+  rationale: string;
+}
+
+export interface RiskResult {
+  score: number;
+  verdict: "safe" | "suspicious" | "dangerous";
+  summary: string;
+  score_breakdown: ScoreBreakdownItem[];
+  override_reasons: string[];
   flagged_safe_browsing: boolean;
   flagged_threat_intel: boolean;
   typosquatting_detected: boolean;
   domain_age_days: number | null;
   redirect_hops: number;
   ssl_valid: boolean;
-  ai_summary: string;
 }
 
-export interface ScanDecisionResponse {
-  allowed: boolean;
-  destination: string; // Resolved final URL after redirects.
-  reason: string;
-  analysis: RiskAnalysis;
+export interface UrlAnalysisResult {
+  input_url: string;
+  normalized_url: string;
+  normalized_scheme: string;
+  normalized_hostname: string;
+  normalized_path: string;
+  registrable_domain: string;
+  subdomain: string;
+  has_non_ascii_domain: boolean;
+  has_punycode_domain: boolean;
+  has_homoglyph_lookalike: boolean;
+  has_suspicious_char_substitution: boolean;
+  has_suspicious_file_extension: boolean;
+  suspicious_file_extension: string | null;
+  reasons: string[];
+  redirect_result: {
+    input_url: string;
+    final_url: string;
+    chain: string[];
+    hop_count: number;
+    has_cross_domain_redirect: boolean;
+  } | null;
 }
 
-export interface DashboardSummaryResponse {
-  safe: number;
-  suspicious: number;
-  danger: number;
-  total: number;
+export interface ScanAnalyzeResponse {
+  scan_id: string;
+  analysis: UrlAnalysisResult;
+  risk: RiskResult;
+  explanation: string | null;
+  persisted: boolean;
+  message: string;
 }
 
-export interface ScanRecord {
-  id: string;
-  created_at: string;
-  scanned_url: string;
-  qr_code_id: string | null;
-  risk_score: number | null;
-  risk_level: "safe" | "suspicious" | "danger" | null;
-  flagged_safe_browsing: boolean;
-  flagged_threat_intel: boolean;
-  typosquatting_detected: boolean;
-  domain_age_days: number | null;
-  redirect_hops: number | null;
-  ssl_valid: boolean | null;
-  ai_summary: string | null;
-  ip_address: string | null;
-  user_agent: string | null;
-  country: string | null;
-}
-
-export interface HealthResponse {
-  status: string;
-}
-
-export interface ContractResponse {
-  version: string;
-  routes: Record<string, string>;
+interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  error: null | { code: string; message: string };
 }
 
 /**
- * Calls POST /scan on the FastAPI backend.
- * Returns the full analysis or null if the backend is unreachable.
+ * Calls POST /api/scan/analyze on the FastAPI backend.
+ * Returns the scan analysis or null if the backend is unreachable.
  */
 export async function scanUrl(
-  url: string,
-  qrCodeId?: string
-): Promise<ScanDecisionResponse | null> {
+  url: string
+): Promise<ScanAnalyzeResponse | null> {
   try {
-    const res = await fetch(`${API_BASE}/scan`, {
+    // Ensure URL has a scheme for the backend's HttpUrl validator
+    const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+
+    const res = await fetch(`${API_BASE}/api/scan/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, qr_code_id: qrCodeId ?? null }),
+      body: JSON.stringify({ url: normalizedUrl }),
     });
     if (!res.ok) return null;
-    return (await res.json()) as ScanDecisionResponse;
+
+    const json = (await res.json()) as ApiResponse<ScanAnalyzeResponse>;
+    if (!json.success || !json.data) return null;
+
+    return json.data;
   } catch {
     // Backend unreachable — caller falls back to client-side checks
     return null;
   }
-}
-
-export async function getDashboardSummary(): Promise<DashboardSummaryResponse | null> {
-  try {
-    const res = await fetch(`${API_BASE}/dashboard/summary`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as DashboardSummaryResponse;
-  } catch {
-    return null;
-  }
-}
-
-export async function getDashboardRecent(limit = 25): Promise<ScanRecord[] | null> {
-  try {
-    const res = await fetch(`${API_BASE}/dashboard/recent?limit=${limit}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as ScanRecord[];
-  } catch {
-    return null;
-  }
-}
-
-export async function getApiHealth(): Promise<HealthResponse | null> {
-  try {
-    const res = await fetch(`${API_BASE}/health`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as HealthResponse;
-  } catch {
-    return null;
-  }
-}
-
-export async function getApiContract(): Promise<ContractResponse | null> {
-  try {
-    const res = await fetch(`${API_BASE}/contract`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as ContractResponse;
-  } catch {
-    return null;
-  }
-}
-
-export function buildProtectedGoUrl(url: string, qrCodeId?: string): string {
-  const params = new URLSearchParams({ url });
-  if (qrCodeId) params.set("qr_code_id", qrCodeId);
-  return `${API_BASE}/go?${params.toString()}`;
 }

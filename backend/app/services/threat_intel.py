@@ -90,18 +90,23 @@ class ThreatIntelService(ServiceStub):
             )
             return self._fallback(url, "Threat-intel provider is not configured.")
 
-        headers: dict[str, str] = {}
-        if self.context.settings.threat_intel_api_key:
-            # TODO: Adjust auth handling to the chosen threat-intel vendor.
-            headers["Authorization"] = (
-                f"Bearer {self.context.settings.threat_intel_api_key}"
-            )
+        api_key = self.context.settings.threat_intel_api_key
+        if not api_key:
+            self.logger.warning("Threat-intel lookup skipped because THREAT_INTEL_API_KEY is missing.")
+            return self._fallback(url, "Threat-intel API key is not configured.")
+
+        # WhoisXML Threat Intel API uses "ioc" (Indicator of Compromise) param.
+        from urllib.parse import urlsplit as _urlsplit
+        domain = _urlsplit(url).hostname or url
 
         try:
             response = await self.context.client.get(
                 base_url,
-                params={"url": url},
-                headers=headers or None,
+                params={
+                    "apiKey": api_key,
+                    "ioc": domain,
+                    "outputFormat": "JSON",
+                },
                 timeout=self.context.settings.threat_intel_timeout_seconds,
             )
             response.raise_for_status()
@@ -133,8 +138,12 @@ class ThreatIntelService(ServiceStub):
             )
 
         raw_response = payload if isinstance(payload, dict) else {"response": payload}
+
+        # WhoisXML returns {total: N, results: [...]} where each result has threat types.
+        results_list = raw_response.get("results") or []
         indicators = _flatten_indicators(
-            raw_response.get("indicators")
+            results_list
+            or raw_response.get("indicators")
             or raw_response.get("matches")
             or raw_response.get("threats")
         )
@@ -143,8 +152,9 @@ class ThreatIntelService(ServiceStub):
             or raw_response.get("details")
             or raw_response.get("signals")
         )
+        total = raw_response.get("total", 0)
         matched_value = raw_response.get("matched")
-        matched = bool(matched_value) if isinstance(matched_value, bool) else bool(indicators)
+        matched = bool(matched_value) if isinstance(matched_value, bool) else (bool(indicators) or (isinstance(total, int) and total > 0))
         confidence_value = raw_response.get("confidence")
         confidence = (
             float(confidence_value)
